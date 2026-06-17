@@ -1,0 +1,83 @@
+{% extends "base.html" %}
+{% block title %}예약 관리{% endblock %}
+{% block content %}
+<div class="max-w-6xl mx-auto bg-white dark:bg-gray-800 rounded-lg shadow p-6">
+    <h2 class="text-xl font-bold mb-4">예약 관리</h2>
+
+    <!-- 추가 -->
+    <form action="/api/schedules" method="post" class="mb-6 p-3 bg-gray-50 dark:bg-gray-700 rounded space-y-3">
+        <div class="flex gap-3 items-end flex-wrap">
+            <div>
+                <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">시각</label>
+                <input name="time" placeholder="09:00" required class="px-3 py-1.5 border rounded dark:bg-gray-600 dark:border-gray-500 w-24">
+            </div>
+            <div>
+                <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">출석번호</label>
+                <input name="code" class="px-3 py-1.5 border rounded dark:bg-gray-600 dark:border-gray-500 w-24">
+            </div>
+            <div>
+                <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">차량번호4</label>
+                <input name="car_no4" class="px-3 py-1.5 border rounded dark:bg-gray-600 dark:border-gray-500 w-24">
+            </div>
+            {% for ttype in ticket_order %}
+                {% if ttype in tickets %}
+                <div>
+                    <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">{{ tickets[ttype].label }}</label>
+                    <input name="tk_{{ ttype }}" type="number" value="0" min="0" class="px-3 py-1.5 border rounded dark:bg-gray-600 dark:border-gray-500 w-20">
+                </div>
+                {% endif %}
+            {% endfor %}
+        </div>
+        <div class="flex gap-3 items-center flex-wrap">
+            <span class="text-xs text-gray-500 dark:text-gray-400">요일:</span>
+            {% for label in day_labels %}
+            <label class="flex items-center gap-1 cursor-pointer">
+                <input type="checkbox" name="day_{{ loop.index0 }}" checked>
+                <span class="text-sm">{{ label }}</span>
+            </label>
+            {% endfor %}
+            <div class="flex-1"></div>
+            <button class="px-4 py-1.5 bg-blue-500 hover:bg-blue-600 text-white rounded">추가</button>
+        </div>
+    </form>
+
+    <!-- 목록 -->
+    <div class="space-y-2">
+        {% for s in schedules %}
+        <div class="bg-gray-50 dark:bg-gray-700 rounded p-3 flex gap-2 items-center">
+            <form action="/api/schedules/{{ s.id }}/edit" method="post" class="flex-1 flex gap-2 items-end flex-wrap">
+                <label class="flex items-center" title="활성/비활성">
+                    <input type="checkbox" name="enabled" {% if s.enabled %}checked{% endif %} class="w-4 h-4">
+                </label>
+                <input name="time" value="{{ s.time }}" class="px-2 py-1 border rounded dark:bg-gray-600 dark:border-gray-500 w-20">
+                <input name="code" value="{{ s.code }}" placeholder="출석" class="px-2 py-1 border rounded dark:bg-gray-600 dark:border-gray-500 w-20">
+                <input name="car_no4" value="{{ s.car_no4 }}" placeholder="차량" class="px-2 py-1 border rounded dark:bg-gray-600 dark:border-gray-500 w-20">
+                {% for ttype in ticket_order %}
+                    {% if ttype in tickets %}
+                    <div>
+                        <label class="block text-xs text-gray-500 dark:text-gray-400">{{ tickets[ttype].label }}</label>
+                        <input name="tk_{{ ttype }}" type="number" value="{{ s.tickets.get(ttype, 0) }}" min="0" class="px-2 py-1 border rounded dark:bg-gray-600 dark:border-gray-500 w-16">
+                    </div>
+                    {% endif %}
+                {% endfor %}
+                <div class="flex gap-2 items-center">
+                    {% for label in day_labels %}
+                    <label class="flex items-center gap-1 cursor-pointer">
+                        <input type="checkbox" name="day_{{ loop.index0 }}" {% if loop.index0 in s.days %}checked{% endif %}>
+                        <span class="text-sm">{{ label }}</span>
+                    </label>
+                    {% endfor %}
+                </div>
+                <button class="px-3 py-1 bg-blue-500 hover:bg-blue-600 text-white rounded text-sm">저장</button>
+            </form>
+            <form action="/api/schedules/{{ s.id }}/delete" method="post"
+                  onsubmit="return confirm('정말 삭제할까요?')">
+                <button class="px-3 py-1 bg-red-500 hover:bg-red-600 text-white rounded text-sm">삭제</button>
+            </form>
+        </div>
+        {% else %}
+        <div class="text-gray-500 text-center py-8">등록된 예약이 없습니다.</div>
+        {% endfor %}
+    </div>
+</div>
+{% endblock %}

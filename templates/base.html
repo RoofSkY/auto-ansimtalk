@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="ko"
+      x-data="{ dark: localStorage.getItem('theme') !== 'light' }"
+      :class="{ 'dark': dark }"
+      x-init="$watch('dark', v => localStorage.setItem('theme', v ? 'dark' : 'light'))">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{% block title %}등하원차량등록{% endblock %}</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = { darkMode: 'class' };
+    </script>
+    <script defer src="https://unpkg.com/alpinejs@3.13.5/dist/cdn.min.js"></script>
+    <style>
+        body { font-family: 'Malgun Gothic', -apple-system, sans-serif; }
+        .log-mono { font-family: Consolas, 'D2Coding', monospace; }
+    </style>
+</head>
+<body class="bg-gray-100 text-gray-900 dark:bg-gray-900 dark:text-gray-100 min-h-screen">
+    <header class="bg-white dark:bg-gray-800 border-b dark:border-gray-700 px-6 py-3 flex items-center sticky top-0 z-10">
+        <h1 class="text-xl font-bold flex-1">
+            <a href="/" class="hover:text-blue-500">등하원차량등록</a>
+        </h1>
+        <nav class="flex gap-1 items-center">
+            <a href="/students" class="px-3 py-1.5 hover:bg-gray-100 dark:hover:bg-gray-700 rounded text-sm">원생</a>
+            <a href="/schedules" class="px-3 py-1.5 hover:bg-gray-100 dark:hover:bg-gray-700 rounded text-sm">예약</a>
+            <a href="/settings" class="px-3 py-1.5 hover:bg-gray-100 dark:hover:bg-gray-700 rounded text-sm">설정</a>
+            <button @click="dark = !dark" class="px-3 py-1.5 hover:bg-gray-100 dark:hover:bg-gray-700 rounded text-lg"
+                    :title="dark ? '라이트 모드' : '다크 모드'">
+                <span x-show="dark">☀️</span>
+                <span x-show="!dark" x-cloak>🌙</span>
+            </button>
+        </nav>
+    </header>
+    <main class="p-4 max-w-screen-2xl mx-auto">
+        {% block content %}{% endblock %}
+    </main>
+    <style>
+        [x-cloak] { display: none !important; }
+    </style>
+</body>
+</html>

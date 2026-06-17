@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block title %}원생 관리{% endblock %}
+{% block content %}
+<div class="max-w-4xl mx-auto bg-white dark:bg-gray-800 rounded-lg shadow p-6">
+    <h2 class="text-xl font-bold mb-4">원생 관리</h2>
+
+    <!-- 추가 -->
+    <form action="/api/students" method="post" class="mb-6 p-3 bg-gray-50 dark:bg-gray-700 rounded flex gap-2 items-end flex-wrap">
+        <div>
+            <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">이름</label>
+            <input name="name" required class="px-3 py-1.5 border rounded dark:bg-gray-600 dark:border-gray-500 w-32">
+        </div>
+        <div>
+            <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">출석번호 4자리</label>
+            <input name="code" class="px-3 py-1.5 border rounded dark:bg-gray-600 dark:border-gray-500 w-24">
+        </div>
+        <div class="flex-1 min-w-48">
+            <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">차량번호 (콤마로 여러 대)</label>
+            <input name="cars" placeholder="1234, 5678" class="w-full px-3 py-1.5 border rounded dark:bg-gray-600 dark:border-gray-500">
+        </div>
+        <button class="px-4 py-1.5 bg-blue-500 hover:bg-blue-600 text-white rounded">추가</button>
+    </form>
+
+    <!-- 목록 -->
+    <div class="space-y-2">
+        {% for s in students %}
+        <div class="flex gap-2 items-center bg-gray-50 dark:bg-gray-700 rounded p-2">
+            <form action="/api/students/{{ loop.index0 }}/edit" method="post" class="flex gap-2 items-center flex-1">
+                <input name="name" value="{{ s.name }}" class="px-2 py-1 border rounded dark:bg-gray-600 dark:border-gray-500 w-32">
+                <input name="code" value="{{ s.code }}" class="px-2 py-1 border rounded dark:bg-gray-600 dark:border-gray-500 w-24">
+                <input name="cars" value="{{ s.car_no4s | join(', ') }}" class="flex-1 px-2 py-1 border rounded dark:bg-gray-600 dark:border-gray-500">
+                <button class="px-3 py-1 bg-blue-500 hover:bg-blue-600 text-white rounded text-sm whitespace-nowrap">저장</button>
+            </form>
+            <form action="/api/students/{{ loop.index0 }}/delete" method="post"
+                  onsubmit="return confirm('정말 삭제할까요?')">
+                <button class="px-3 py-1 bg-red-500 hover:bg-red-600 text-white rounded text-sm">삭제</button>
+            </form>
+        </div>
+        {% else %}
+        <div class="text-gray-500 text-center py-8">등록된 원생이 없습니다.</div>
+        {% endfor %}
+    </div>
+</div>
+{% endblock %}

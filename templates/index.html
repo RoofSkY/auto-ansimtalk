@@ -1,0 +1,199 @@
+{% extends "base.html" %}
+{% block content %}
+<div x-data="mainApp()" class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+
+    <!-- 좌측: 원생 목록 -->
+    <section class="bg-white dark:bg-gray-800 rounded-lg shadow p-4 flex flex-col" style="height: calc(100vh - 7rem)">
+        <div class="flex items-center justify-between mb-3 gap-2">
+            <h2 class="font-bold text-lg whitespace-nowrap">원생 목록</h2>
+            <input type="text" x-model="searchQuery" placeholder="이름 검색 (예: ㄱ, 강, 강다)"
+                class="flex-1 px-3 py-1 border rounded dark:bg-gray-700 dark:border-gray-600 text-sm">
+        </div>
+        <div class="grid grid-cols-12 gap-2 text-xs font-bold text-gray-500 dark:text-gray-400 px-2 mb-1 border-b dark:border-gray-700 pb-1">
+            <span class="col-span-3">이름</span>
+            <span class="col-span-2">출석번호</span>
+            <span class="col-span-3">차량번호</span>
+            <span class="col-span-4"></span>
+        </div>
+        <div class="space-y-1 overflow-y-auto flex-1">
+            <template x-for="s in filteredStudents" :key="s.originalIndex">
+                <div class="grid grid-cols-12 gap-2 items-center p-2 rounded text-sm transition-colors"
+                     :class="isParked(s) ? 'bg-green-100 dark:bg-green-900/50' : 'bg-gray-50 dark:bg-gray-700/50'">
+                    <span x-text="s.name" class="col-span-3 font-semibold truncate"></span>
+                    <span x-text="s.code" class="col-span-2 text-gray-600 dark:text-gray-400"></span>
+                    <span x-text="(s.car_no4s||[]).join(', ')" class="col-span-3 text-gray-600 dark:text-gray-400 truncate"></span>
+                    <div class="col-span-4 flex gap-1 justify-end">
+                        <button @click="doAction(s.originalIndex, 'attendance', $event)"
+                                class="px-2 py-1 bg-blue-500 hover:bg-blue-600 active:bg-blue-700 text-white rounded text-xs">
+                            등하원처리
+                        </button>
+                        <button @click="doAction(s.originalIndex, 'vehicle', $event)"
+                                class="px-2 py-1 bg-blue-500 hover:bg-blue-600 active:bg-blue-700 text-white rounded text-xs">
+                            차량등록
+                        </button>
+                    </div>
+                </div>
+            </template>
+            <div x-show="filteredStudents.length === 0" class="text-center text-gray-500 py-8">
+                <span x-show="students.length === 0">등록된 원생이 없습니다. <a href="/students" class="text-blue-500 hover:underline">추가하기</a></span>
+                <span x-show="students.length > 0 && searchQuery" x-text="`'${searchQuery}' 검색 결과 없음`"></span>
+            </div>
+        </div>
+    </section>
+
+    <!-- 우측: 로그 -->
+    <section class="bg-white dark:bg-gray-800 rounded-lg shadow p-4 flex flex-col" style="height: calc(100vh - 7rem)">
+        <div class="flex items-center justify-between mb-3">
+            <h2 class="font-bold text-lg">로그</h2>
+            <button x-show="!autoScroll" @click="scrollToBottom(true)"
+                    class="px-3 py-1 bg-blue-500 hover:bg-blue-600 text-white rounded-full text-xs">
+                ↓ 최신
+            </button>
+        </div>
+        <div class="flex gap-1 mb-2 border-b dark:border-gray-700 overflow-x-auto">
+            <template x-for="tab in logTabs" :key="tab.key">
+                <button @click="currentTab = tab.key"
+                        class="px-3 py-1.5 text-sm whitespace-nowrap"
+                        :class="currentTab === tab.key ? 'border-b-2 border-blue-500 font-semibold text-blue-500' : 'text-gray-500 hover:text-gray-700 dark:hover:text-gray-300'"
+                        x-text="tab.label"></button>
+            </template>
+        </div>
+        <div class="overflow-y-auto flex-1 log-mono text-xs leading-relaxed pr-2"
+             x-ref="logBox" @scroll="onLogScroll">
+            <template x-for="(log, i) in filteredLogs" :key="i">
+                <div :class="log.ok ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'"
+                     x-text="`[${log.time}] [${log.type}] ${log.target} — ${log.message}`"></div>
+            </template>
+            <div x-show="filteredLogs.length === 0" class="text-gray-500 text-center py-8">
+                표시할 로그가 없습니다.
+            </div>
+        </div>
+    </section>
+</div>
+
+<script>
+// ---------- 초성 검색 ----------
+const CHOSUNG = "ㄱㄲㄴㄷㄸㄹㅁㅂㅃㅅㅆㅇㅈㅉㅊㅋㅌㅍㅎ";
+const CHOSUNG_SET = new Set(CHOSUNG);
+
+function chosungOf(ch) {
+    if (!ch) return null;
+    const code = ch.charCodeAt(0);
+    if (code >= 0xAC00 && code <= 0xD7A3) {
+        return CHOSUNG[Math.floor((code - 0xAC00) / (21 * 28))];
+    }
+    return null;
+}
+
+function nameMatches(name, query) {
+    if (!query) return true;
+    if (name.length < query.length) return false;
+    for (let i = 0; i < query.length; i++) {
+        const q = query[i], n = name[i];
+        if (CHOSUNG_SET.has(q)) {
+            if (chosungOf(n) !== q) return false;
+        } else {
+            if (q !== n) return false;
+        }
+    }
+    return true;
+}
+
+function mainApp() {
+    return {
+        students: {{ students | tojson }},
+        logs: {{ logs | tojson }},
+        inCars: new Set({{ in_cars | tojson }}),
+        searchQuery: '',
+        currentTab: 'all',
+        autoScroll: true,
+        logTabs: [
+            { key: 'all', label: '전체', match: () => true },
+            { key: 'ansim', label: '안심톡', match: l => l.type === '등하원' || l.type === '등하원(예약)' },
+            { key: 'park', label: '주차', match: l => ['차량등록','차량등록(예약)','입차','출차'].includes(l.type) },
+            { key: 'park_reg', label: '주차등록', match: l => l.type === '차량등록' || l.type === '차량등록(예약)' },
+            { key: 'inout', label: '입출차', match: l => l.type === '입차' || l.type === '출차' },
+            { key: 'in', label: '입차', match: l => l.type === '입차' },
+            { key: 'out', label: '출차', match: l => l.type === '출차' },
+        ],
+
+        init() {
+            this.connectSSE();
+            this.$nextTick(() => this.scrollToBottom(true));
+        },
+
+        connectSSE() {
+            const es = new EventSource('/stream');
+            es.onmessage = (e) => {
+                if (e.data.startsWith(':')) return;
+                let msg;
+                try { msg = JSON.parse(e.data); } catch { return; }
+                if (msg.type === 'log') {
+                    this.logs.push(msg.data);
+                    if (this.autoScroll) {
+                        this.$nextTick(() => this.scrollToBottom(false));
+                    }
+                } else if (msg.type === 'in_cars') {
+                    this.inCars = new Set(msg.data.cars);
+                }
+            };
+            es.onerror = () => {
+                setTimeout(() => this.connectSSE(), 3000);
+                es.close();
+            };
+        },
+
+        isParked(student) {
+            for (const c of (student.car_no4s || [])) {
+                if (this.inCars.has(c)) return true;
+            }
+            return false;
+        },
+
+        get filteredStudents() {
+            const q = this.searchQuery.trim();
+            const out = [];
+            this.students.forEach((s, idx) => {
+                if (nameMatches(s.name || '', q)) {
+                    out.push({ ...s, originalIndex: idx });
+                }
+            });
+            return out;
+        },
+
+        get filteredLogs() {
+            const tab = this.logTabs.find(t => t.key === this.currentTab);
+            return tab ? this.logs.filter(tab.match) : this.logs;
+        },
+
+        scrollToBottom(force) {
+            const box = this.$refs.logBox;
+            if (!box) return;
+            box.scrollTop = box.scrollHeight;
+            if (force) this.autoScroll = true;
+        },
+
+        onLogScroll() {
+            const box = this.$refs.logBox;
+            if (!box) return;
+            const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 5;
+            this.autoScroll = atBottom;
+        },
+
+        async doAction(idx, action, ev) {
+            const btn = ev.currentTarget;
+            btn.disabled = true;
+            btn.classList.add('opacity-50');
+            try {
+                await fetch(`/api/students/${idx}/${action}`, { method: 'POST' });
+            } finally {
+                setTimeout(() => {
+                    btn.disabled = false;
+                    btn.classList.remove('opacity-50');
+                }, 500);
+            }
+        },
+    };
+}
+</script>
+{% endblock %}
