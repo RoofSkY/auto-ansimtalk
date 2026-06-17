@@ -42,12 +42,11 @@ _FIXED_PARAMS = {
     "re_time": "20",
 }
 
-# 자격증명은 ansim_config.json 에서 읽음
+# 자격증명은 ansim_config.json 에서 읽음.
+# program / customer_id 는 로그인 직후 member_list.asp 로 자동 조회.
 DEFAULT_CONFIG = {
     "user_id": "",
     "password": "",
-    "customer_id": "",
-    "program": "gyeonggi",
 }
 
 _BASE = (
@@ -108,6 +107,12 @@ def _save_cookies() -> None:
         pass
 
 
+def _has_aspsession() -> bool:
+    if _session is None:
+        return False
+    return any(name.upper().startswith("ASPSESSIONID") for name in _session.cookies.keys())
+
+
 def _ensure_init() -> None:
     global _session, _config
     if _session is None:
@@ -115,6 +120,11 @@ def _ensure_init() -> None:
         _session = requests.Session()
         _session.headers.update(_HEADERS)
         _restore_cookies()
+    if not _has_aspsession():
+        try:
+            _login_flow()
+        except Exception:
+            pass
 
 
 def _connect() -> bool:
@@ -126,7 +136,7 @@ def _connect() -> bool:
 
 
 def _login() -> dict:
-    """loginChk.asp — SHOP_MEM_CODE 를 customer_id 로 저장."""
+    """loginChk.asp — 세션 인증. SHOP_MEM_CODE 반환."""
     params = {
         "sMemId": _config["user_id"],
         "sMemPw": _config["password"],
@@ -142,25 +152,53 @@ def _login() -> dict:
         raise RuntimeError(f"로그인 응답 파싱 실패: {res.text[:200]!r}")
     if data.get("RESULT") != "Y":
         raise RuntimeError(f"로그인 거부: {data}")
-    cid = (data.get("SHOP_MEM_CODE") or "").strip()
-    if cid:
-        _config["customer_id"] = cid
-        _save_config()
     _save_cookies()
     return data
 
 
+def _fetch_facility(shop_mem_code: str) -> tuple[str, str]:
+    """member_list.asp 에서 첫 멤버의 (PROGRAM, PROGRAMID) 추출."""
+    res = _session.post(
+        f"{BASE_URL}/member_list.asp",
+        params={"ssMemCode": shop_mem_code}, data="", timeout=10,
+    )
+    res.raise_for_status()
+    try:
+        data = res.json()
+    except ValueError:
+        raise RuntimeError(f"member_list 파싱 실패: {res.text[:200]!r}")
+    members = data.get("MEMBER_LIST") or []
+    if not members:
+        raise RuntimeError(f"member_list 가 비었음 (ssMemCode={shop_mem_code})")
+    m = members[0]
+    program = (m.get("PROGRAM") or "").strip()
+    pid = (m.get("PROGRAMID") or "").strip()
+    if not program or not pid:
+        raise RuntimeError(f"PROGRAM/PROGRAMID 누락: {m}")
+    return program, pid
+
+
 def _login_flow() -> None:
     _connect()
-    _login()
+    login_data = _login()
+    shop_mem = (login_data.get("SHOP_MEM_CODE") or "").strip()
+    if not shop_mem:
+        raise RuntimeError("로그인 응답에 SHOP_MEM_CODE 없음")
+    program, customer_id = _fetch_facility(shop_mem)
+    _config["program"] = program
+    _config["customer_id"] = customer_id
 
 
 def _try_register(code: str) -> tuple[bool, str, bool]:
     """Returns: (성공 여부, 메시지, 세션 만료로 재시도해야 하는지)."""
+    customer_id = (_config.get("customer_id") or "").strip()
+    program = (_config.get("program") or "").strip()
+    if not customer_id or not program:
+        return False, "시설 정보 미설정 — 로그인 필요", True
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     params = {
-        "program": _config.get("program", "gyeonggi"),
-        "customer_id": _config["customer_id"],
+        "program": program,
+        "customer_id": customer_id,
         "Check_Value": code,
         "attendance_dt": now,
         **_FIXED_PARAMS,
@@ -233,11 +271,10 @@ def setup_guide() -> None:
     print("ansim_config.json 형식:\n")
     print("  {")
     print('    "user_id": "안심톡 로그인 ID",')
-    print('    "password": "비밀번호",')
-    print('    "customer_id": "시설 ID",      // 로그인 시 자동 갱신')
-    print('    "program": "gyeonggi"')
+    print('    "password": "비밀번호"')
     print("  }\n")
     print("주의: 비밀번호가 평문 저장됨.")
+    print("program / customer_id 는 로그인 시 자동 조회 (member_list.asp).")
 
 
 def main() -> None:
