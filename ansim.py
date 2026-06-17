@@ -187,10 +187,14 @@ def _try_register(code: str) -> tuple[bool, str, bool]:
 
     result = (data.get("RESULT") or "").strip()
     msg1 = (data.get("MSG1") or "").strip()
+    msg3 = (data.get("MSG3") or "").strip()
     msg4 = (data.get("MSG4") or "").strip()
 
     if result == "I":
         return False, msg1 or "학생정보 없음", False
+    if result == "R":
+        reason = (msg3 + " " + msg4).strip()
+        return False, reason or "유예시간 미경과", False
     if result in ("Y", "S", "U", "M"):
         return True, msg4 or msg1 or "등록 완료", False
     return False, msg1 or f"미상 응답: RESULT={result!r}", False
