@@ -186,13 +186,14 @@ def _try_register(code: str) -> tuple[bool, str, bool]:
         return False, f"응답 파싱 실패: {body[:100]}", True
 
     result = (data.get("RESULT") or "").strip()
-    msg = (data.get("MSG1") or "").strip()
+    msg1 = (data.get("MSG1") or "").strip()
+    msg4 = (data.get("MSG4") or "").strip()
 
     if result == "I":
-        return False, msg or "학생정보 없음", False
+        return False, msg1 or "학생정보 없음", False
     if result in ("Y", "S", "U", "M"):
-        return True, msg or "등록 완료", False
-    return False, msg or f"미상 응답: RESULT={result!r}, MSG={msg!r}", False
+        return True, msg4 or msg1 or "등록 완료", False
+    return False, msg1 or f"미상 응답: RESULT={result!r}", False
 
 
 def register(code: str) -> bool:
