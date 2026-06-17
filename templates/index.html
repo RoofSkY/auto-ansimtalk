@@ -6,7 +6,7 @@
     <section class="bg-white dark:bg-gray-800 rounded-lg shadow p-4 flex flex-col" style="height: calc(100vh - 7rem)">
         <div class="flex items-center justify-between mb-3 gap-2">
             <h2 class="font-bold text-lg whitespace-nowrap">원생 목록</h2>
-            <input type="text" x-model="searchQuery" placeholder="이름 검색 (예: ㄱ, 강, 강다)"
+            <input type="text" x-model="searchQuery" placeholder="이름 검색"
                 class="flex-1 px-3 py-1 border rounded dark:bg-gray-700 dark:border-gray-600 text-sm">
         </div>
         <div class="grid grid-cols-12 gap-2 text-xs font-bold text-gray-500 dark:text-gray-400 px-2 mb-1 border-b dark:border-gray-700 pb-1">
@@ -18,7 +18,7 @@
         <div class="space-y-1 overflow-y-auto flex-1">
             <template x-for="s in filteredStudents" :key="s.originalIndex">
                 <div class="grid grid-cols-12 gap-2 items-center p-2 rounded text-sm transition-colors"
-                     :class="isParked(s) ? 'bg-green-100 dark:bg-green-900/50' : 'bg-gray-50 dark:bg-gray-700/50'">
+                     :class="isParked(s) ? 'bg-green-300 dark:bg-green-700' : 'bg-gray-50 dark:bg-gray-700/50'">
                     <span x-text="s.name" class="col-span-3 font-semibold truncate"></span>
                     <span x-text="s.code" class="col-span-2 text-gray-600 dark:text-gray-400"></span>
                     <span x-text="(s.car_no4s||[]).join(', ')" class="col-span-3 text-gray-600 dark:text-gray-400 truncate"></span>
