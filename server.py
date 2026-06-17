@@ -51,6 +51,18 @@ TICKET_DISPLAY_ORDER = ["free", "paid"]
 PORT = 5000
 
 
+# ---------- 차량번호 파서 ----------
+def _parse_car_entry(s: str) -> tuple[str, str] | None:
+    s = (s or "").strip()
+    if len(s) < 4:
+        return None
+    last4 = s[-4:]
+    if not last4.isdigit():
+        return None
+    full = s if len(s) > 4 else ""
+    return last4, full
+
+
 # ---------- 데이터 로드/저장 ----------
 def _student_sort_key(s: dict) -> str:
     return (s.get("name") or "").strip()
@@ -247,9 +259,9 @@ def do_vehicle(student: dict, tickets: dict[str, int] | None = None,
         single = student.get("car_no4", "")
         if single:
             cars = [single]
-    valid_cars = [c for c in cars if c.isdigit() and len(c) == 4]
+    parsed = [(c, p) for c in cars if (p := _parse_car_entry(c))]
 
-    cars_label = ",".join(valid_cars) if valid_cars else (",".join(cars) if cars else "")
+    cars_label = ",".join(c for c, _ in parsed) if parsed else (",".join(cars) if cars else "")
     overall_target = f"{cars_label} {name}".strip() if cars_label else name
 
     tickets = {t: int(c) for t, c in tickets.items() if int(c) > 0}
@@ -261,27 +273,27 @@ def do_vehicle(student: dict, tickets: dict[str, int] | None = None,
             emit_log(tag, overall_target, f"알 수 없는 권종: {ttype}", False)
             return
 
-    if not valid_cars:
+    if not parsed:
         emit_log(tag, overall_target, f"차량번호 없음/오류: {cars}", False)
         return
 
     parked = []
-    for car in valid_cars:
-        car_target = f"{car} {name}".strip()
+    for entry, (last4, full) in parsed:
+        car_target = f"{entry} {name}".strip()
         try:
-            in_car = npdc.find_in_car(car)
+            in_car = npdc.find_in_car(last4, full_plate=full or None)
         except Exception as e:
             emit_log(tag, car_target, f"조회 오류: {e}", False)
             continue
         if in_car is not None:
-            parked.append((car, in_car))
+            parked.append((entry, in_car))
 
     if not parked:
         emit_log(tag, overall_target, "입차된 차량 없음", False)
         return
 
-    for car, in_car in parked:
-        car_target = f"{car} {name}".strip()
+    for entry, in_car in parked:
+        car_target = f"{entry} {name}".strip()
         for ttype, count in tickets.items():
             ticket = npdc.TICKETS[ttype]
             try:
@@ -319,37 +331,52 @@ def vehicle_poller_loop():
 
 
 def _poll_once():
-    by_car: dict[str, dict] = {}
+    entry_to_student: dict[str, dict] = {}
+    entry_to_full: dict[str, str] = {}
+    by_last4: dict[str, list[str]] = {}
     for s in state.students:
         for c in s.get("car_no4s", []):
-            if c.isdigit() and len(c) == 4:
-                by_car[c] = s
-    tracked = set(by_car.keys())
+            p = _parse_car_entry(c)
+            if not p:
+                continue
+            last4, full = p
+            entry_to_student[c] = s
+            entry_to_full[c] = full
+            by_last4.setdefault(last4, []).append(c)
+    tracked = set(entry_to_student.keys())
 
     current: set[str] = set()
-    for car in tracked:
+    for last4, entries in by_last4.items():
         try:
-            in_car = npdc.find_in_car(car)
+            cars = npdc.find_in_cars(last4)
         except Exception:
             continue
-        if in_car is not None:
-            current.add(car)
-            state.last_seen_carNo[car] = in_car.get("carNo") or car
+        if not cars:
+            continue
+        for entry in entries:
+            full = entry_to_full[entry]
+            if full:
+                match = next((c for c in cars if (c.get("carNo") or "") == full), None)
+            else:
+                match = cars[0]
+            if match:
+                current.add(entry)
+                state.last_seen_carNo[entry] = match.get("carNo") or entry
 
     if state._poll_initialized:
         prev_tracked = state.prev_in_cars & tracked
         entered = current - prev_tracked
         exited = prev_tracked - current
-        for car in entered:
-            s = by_car.get(car) or {}
+        for entry in entered:
+            s = entry_to_student.get(entry) or {}
             name = s.get("name", "")
-            full = state.last_seen_carNo.get(car, car)
-            emit_log("입차", name, full, True)
-        for car in exited:
-            s = by_car.get(car) or {}
+            full_name = state.last_seen_carNo.get(entry, entry)
+            emit_log("입차", name, full_name, True)
+        for entry in exited:
+            s = entry_to_student.get(entry) or {}
             name = s.get("name", "")
-            full = state.last_seen_carNo.get(car, car)
-            emit_log("출차", name, full, True)
+            full_name = state.last_seen_carNo.get(entry, entry)
+            emit_log("출차", name, full_name, True)
     else:
         state._poll_initialized = True
 
@@ -414,8 +441,8 @@ def _parse_schedule_form(form) -> dict:
         return {"error": "출석번호 또는 차량번호 중 최소 하나 필요"}
     if code and not (code.isdigit() and len(code) == 4):
         return {"error": "출석번호 4자리 숫자"}
-    if car and not (car.isdigit() and len(car) == 4):
-        return {"error": "차량번호 4자리 숫자"}
+    if car and _parse_car_entry(car) is None:
+        return {"error": "차량번호는 마지막 4자리가 숫자여야 함"}
 
     days = []
     for i in range(5):

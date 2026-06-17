@@ -83,12 +83,12 @@ def _post(path: str, payload: dict, submission_id: str,
     return res
 
 
-def find_in_car(car_no4: str) -> dict | None:
+def find_in_cars(car_no4: str) -> list[dict]:
     submission_id = "mf_wfm_body_sbm_selectPtnrNonInCarList"
     payload = {
         "dma_search": {
             "carNo4": car_no4,
-            "nRecordCnt": 2,
+            "nRecordCnt": 10,
             "nCurPage": 1,
             "strFirstYn": "Y",
         },
@@ -97,8 +97,19 @@ def find_in_car(car_no4: str) -> dict | None:
     res = _post("/wd/dc/selectPtnrNonInCarList.do", payload, submission_id)
     res.raise_for_status()
     data = res.json()
-    items = data.get("dlt_list") or []
-    return items[0] if items else None
+    return data.get("dlt_list") or []
+
+
+def find_in_car(car_no4: str, full_plate: str | None = None) -> dict | None:
+    items = find_in_cars(car_no4)
+    if not items:
+        return None
+    if full_plate:
+        for it in items:
+            if (it.get("carNo") or "") == full_plate:
+                return it
+        return None
+    return items[0]
 
 
 def apply_discount(in_car: dict, ticket_type: str = DEFAULT_TICKET) -> tuple[bool, str]:
