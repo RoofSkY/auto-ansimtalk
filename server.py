@@ -31,6 +31,12 @@ try:
 except ImportError:
     _NOTIFY_AVAILABLE = False
 
+try:
+    import winsound
+    _SOUND_AVAILABLE = True
+except ImportError:
+    _SOUND_AVAILABLE = False
+
 
 # ---------- 경로 ----------
 HERE = Path(__file__).resolve().parent
@@ -44,6 +50,7 @@ LOGS_DIR.mkdir(exist_ok=True)
 TEMPLATES_DIR = HERE / "templates"
 STATIC_DIR = HERE / "static"
 STATIC_DIR.mkdir(exist_ok=True)
+SOUND_DIR = HERE / "sound"
 
 
 # ---------- 기본 설정 ----------
@@ -236,6 +243,17 @@ def emit_log(kind: str, target: str, message: str, ok: bool) -> None:
     emit_event("log", entry)
 
 
+# ---------- 사운드 재생 ----------
+def _play_sound(filename: str) -> None:
+    if not _SOUND_AVAILABLE:
+        return
+    path = SOUND_DIR / filename
+    try:
+        winsound.PlaySound(str(path), winsound.SND_FILENAME | winsound.SND_ASYNC)
+    except Exception:
+        pass
+
+
 # ---------- Windows 토스트 알림 ----------
 def _notify_vehicle(kind: str, name: str, car: str) -> None:
     if not _NOTIFY_AVAILABLE:
@@ -262,6 +280,7 @@ def do_attendance(student: dict, tag: str = "등하원") -> None:
     target = f"{code} {name}".strip() if code else name
     if not (code.isdigit() and len(code) == 4):
         emit_log(tag, target, f"출석번호 형식 오류: {code!r}", False)
+        _play_sound("S2.wav")
         return
     try:
         ok = ansim.register(code)
@@ -269,8 +288,10 @@ def do_attendance(student: dict, tag: str = "등하원") -> None:
             "등하원 등록 완료" if ok else "등하원 등록 실패"
         )
         emit_log(tag, target, msg, ok)
+        _play_sound("S1.wav" if ok else "S2.wav")
     except Exception as e:
         emit_log(tag, target, f"오류: {e}", False)
+        _play_sound("S2.wav")
 
 
 def do_vehicle(student: dict, tickets: dict[str, int] | None = None,
