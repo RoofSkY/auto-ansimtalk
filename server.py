@@ -26,12 +26,6 @@ import npdc
 import ansim
 
 try:
-    from winotify import Notification, audio
-    _NOTIFY_AVAILABLE = True
-except ImportError:
-    _NOTIFY_AVAILABLE = False
-
-try:
     import winsound
     _SOUND_AVAILABLE = True
 except ImportError:
@@ -254,23 +248,9 @@ def _play_sound(filename: str) -> None:
         pass
 
 
-# ---------- Windows 토스트 알림 ----------
+# ---------- 입출차 토스트 (브라우저 SSE) ----------
 def _notify_vehicle(kind: str, name: str, car: str) -> None:
-    if not _NOTIFY_AVAILABLE:
-        return
-    title = f"🚗 {kind}" if kind == "입차" else f"🅿️ {kind}"
-    body = f"{name} · {car}" if name else car
-    try:
-        toast = Notification(
-            app_id="auto-ansimtalk",
-            title=title,
-            msg=body,
-            duration="short",
-        )
-        toast.set_audio(audio.Default, loop=False)
-        toast.show()
-    except Exception:
-        pass
+    emit_event("vehicle_notify", {"kind": kind, "name": name, "car": car})
 
 
 # ---------- 액션 (백그라운드 스레드에서 실행) ----------

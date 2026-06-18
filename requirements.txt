@@ -6,4 +6,3 @@ jinja2
 python-multipart
 pystray
 pillow
-winotify

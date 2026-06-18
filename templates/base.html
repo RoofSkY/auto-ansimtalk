@@ -36,6 +36,62 @@
     <main class="p-4 max-w-screen-2xl mx-auto">
         {% block content %}{% endblock %}
     </main>
+
+    <div x-data="vehicleToasts()" x-init="connect()"
+         class="fixed bottom-4 right-4 z-50 flex flex-col gap-2 items-end pointer-events-none">
+        <template x-for="t in toasts" :key="t.id">
+            <div class="pointer-events-auto bg-white dark:bg-gray-800 border-l-4 rounded-lg shadow-lg px-4 py-3 min-w-64 max-w-sm"
+                 :class="t.kind === '입차' ? 'border-green-500' : 'border-orange-500'"
+                 x-transition:enter="transition ease-out duration-300"
+                 x-transition:enter-start="translate-x-full opacity-0"
+                 x-transition:enter-end="translate-x-0 opacity-100"
+                 x-transition:leave="transition ease-in duration-300"
+                 x-transition:leave-start="translate-x-0 opacity-100"
+                 x-transition:leave-end="translate-x-full opacity-0">
+                <div class="flex items-start gap-3">
+                    <span class="text-2xl leading-none" x-text="t.kind === '입차' ? '🚗' : '🅿️'"></span>
+                    <div class="flex-1 min-w-0">
+                        <div class="font-bold text-sm" x-text="t.kind"></div>
+                        <div class="text-sm text-gray-600 dark:text-gray-300 truncate"
+                             x-text="t.name ? `${t.name} · ${t.car}` : t.car"></div>
+                    </div>
+                    <button @click="dismiss(t.id)"
+                            class="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 text-xl leading-none">×</button>
+                </div>
+            </div>
+        </template>
+    </div>
+
+    <script>
+    function vehicleToasts() {
+        return {
+            toasts: [],
+            _seq: 0,
+            connect() {
+                const es = new EventSource('/stream');
+                es.onmessage = (e) => {
+                    if (e.data.startsWith(':')) return;
+                    let msg;
+                    try { msg = JSON.parse(e.data); } catch { return; }
+                    if (msg.type === 'vehicle_notify') this.push(msg.data);
+                };
+                es.onerror = () => {
+                    es.close();
+                    setTimeout(() => this.connect(), 3000);
+                };
+            },
+            push(data) {
+                const id = ++this._seq;
+                this.toasts.push({ id, ...data });
+                setTimeout(() => this.dismiss(id), 5000);
+            },
+            dismiss(id) {
+                this.toasts = this.toasts.filter(t => t.id !== id);
+            },
+        };
+    }
+    </script>
+
     <style>
         [x-cloak] { display: none !important; }
     </style>
