@@ -25,6 +25,12 @@ import uvicorn
 import npdc
 import ansim
 
+try:
+    from winotify import Notification, audio
+    _NOTIFY_AVAILABLE = True
+except ImportError:
+    _NOTIFY_AVAILABLE = False
+
 
 # ---------- 경로 ----------
 HERE = Path(__file__).resolve().parent
@@ -230,6 +236,25 @@ def emit_log(kind: str, target: str, message: str, ok: bool) -> None:
     emit_event("log", entry)
 
 
+# ---------- Windows 토스트 알림 ----------
+def _notify_vehicle(kind: str, name: str, car: str) -> None:
+    if not _NOTIFY_AVAILABLE:
+        return
+    title = f"🚗 {kind}" if kind == "입차" else f"🅿️ {kind}"
+    body = f"{name} · {car}" if name else car
+    try:
+        toast = Notification(
+            app_id="auto-ansimtalk",
+            title=title,
+            msg=body,
+            duration="short",
+        )
+        toast.set_audio(audio.Default, loop=False)
+        toast.show()
+    except Exception:
+        pass
+
+
 # ---------- 액션 (백그라운드 스레드에서 실행) ----------
 def do_attendance(student: dict, tag: str = "등하원") -> None:
     name = student.get("name", "")
@@ -372,11 +397,13 @@ def _poll_once():
             name = s.get("name", "")
             full_name = state.last_seen_carNo.get(entry, entry)
             emit_log("입차", name, full_name, True)
+            _notify_vehicle("입차", name, full_name)
         for entry in exited:
             s = entry_to_student.get(entry) or {}
             name = s.get("name", "")
             full_name = state.last_seen_carNo.get(entry, entry)
             emit_log("출차", name, full_name, True)
+            _notify_vehicle("출차", name, full_name)
     else:
         state._poll_initialized = True
 
