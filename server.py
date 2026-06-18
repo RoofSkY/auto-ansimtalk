@@ -254,7 +254,7 @@ def _notify_vehicle(kind: str, name: str, car: str) -> None:
 
 
 # ---------- 액션 (백그라운드 스레드에서 실행) ----------
-def do_attendance(student: dict, tag: str = "등하원") -> None:
+def do_attendance(student: dict, tag: str = "안심톡") -> None:
     name = student.get("name", "")
     code = student.get("code", "")
     target = f"{code} {name}".strip() if code else name
@@ -265,7 +265,7 @@ def do_attendance(student: dict, tag: str = "등하원") -> None:
     try:
         ok = ansim.register(code)
         msg = getattr(ansim, "LAST_MESSAGE", "") or (
-            "등하원 등록 완료" if ok else "등하원 등록 실패"
+            "등록 완료" if ok else "등록 실패"
         )
         emit_log(tag, target, msg, ok)
         _play_sound("S1.wav" if ok else "S2.wav")
@@ -441,7 +441,7 @@ def scheduler_loop():
             if code:
                 threading.Thread(
                     target=do_attendance,
-                    args=({"name": label, "code": code}, "등하원(예약)"),
+                    args=({"name": label, "code": code}, "안심톡(예약)"),
                     daemon=True,
                 ).start()
             if car and tickets:

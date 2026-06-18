@@ -109,7 +109,7 @@ function mainApp() {
         autoScroll: true,
         logTabs: [
             { key: 'all', label: '전체', match: () => true },
-            { key: 'ansim', label: '안심톡', match: l => l.type === '등하원' || l.type === '등하원(예약)' },
+            { key: 'ansim', label: '안심톡', match: l => ['안심톡','안심톡(예약)','등하원','등하원(예약)'].includes(l.type) },
             { key: 'park', label: '주차', match: l => ['차량등록','차량등록(예약)','입차','출차'].includes(l.type) },
             { key: 'park_reg', label: '주차등록', match: l => l.type === '차량등록' || l.type === '차량등록(예약)' },
             { key: 'inout', label: '입출차', match: l => l.type === '입차' || l.type === '출차' },
