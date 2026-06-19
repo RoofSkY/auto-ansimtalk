@@ -82,8 +82,9 @@
             },
             push(data) {
                 const id = ++this._seq;
+                const duration = data.duration_ms || 5000;
                 this.toasts.push({ id, ...data });
-                setTimeout(() => this.dismiss(id), 5000);
+                setTimeout(() => this.dismiss(id), duration);
             },
             dismiss(id) {
                 this.toasts = this.toasts.filter(t => t.id !== id);

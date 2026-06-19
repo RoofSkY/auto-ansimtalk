@@ -17,6 +17,20 @@
                    class="px-3 py-1.5 border rounded dark:bg-gray-700 dark:border-gray-600 w-32">
         </div>
 
+        <div class="pt-2 border-t dark:border-gray-700"></div>
+
+        <label class="flex items-center gap-3 cursor-pointer">
+            <input type="checkbox" name="vehicle_toast" {% if config.vehicle_toast %}checked{% endif %} class="w-4 h-4">
+            <span>입출차 토스트 알림</span>
+        </label>
+
+        <div>
+            <label class="block text-sm text-gray-500 dark:text-gray-400 mb-1">토스트 표시 시간 (초, 최소 1)</label>
+            <input name="vehicle_toast_duration" type="number"
+                   value="{{ config.vehicle_toast_duration }}" min="1"
+                   class="px-3 py-1.5 border rounded dark:bg-gray-700 dark:border-gray-600 w-32">
+        </div>
+
         <button class="px-4 py-2 bg-blue-500 hover:bg-blue-600 text-white rounded">저장</button>
     </form>
 

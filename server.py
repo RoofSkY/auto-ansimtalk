@@ -51,6 +51,8 @@ SOUND_DIR = HERE / "sound"
 DEFAULT_CONFIG = {
     "auto_search": True,
     "auto_search_interval": 60,
+    "vehicle_toast": True,
+    "vehicle_toast_duration": 5,
 }
 
 DAY_LABELS = ["월", "화", "수", "목", "금"]
@@ -250,7 +252,13 @@ def _play_sound(filename: str) -> None:
 
 # ---------- 입출차 토스트 (브라우저 SSE) ----------
 def _notify_vehicle(kind: str, name: str, car: str) -> None:
-    emit_event("vehicle_notify", {"kind": kind, "name": name, "car": car})
+    if not state.config.get("vehicle_toast", True):
+        return
+    duration_ms = max(1, int(state.config.get("vehicle_toast_duration", 5))) * 1000
+    emit_event("vehicle_notify", {
+        "kind": kind, "name": name, "car": car,
+        "duration_ms": duration_ms,
+    })
 
 
 # ---------- 액션 (백그라운드 스레드에서 실행) ----------
@@ -665,10 +673,17 @@ async def shutdown():
 async def update_settings(request: Request):
     form = await request.form()
     state.config["auto_search"] = form.get("auto_search") == "on"
+    state.config["vehicle_toast"] = form.get("vehicle_toast") == "on"
     raw = form.get("auto_search_interval")
     if raw:
         try:
             state.config["auto_search_interval"] = max(5, int(raw))
+        except ValueError:
+            pass
+    raw = form.get("vehicle_toast_duration")
+    if raw:
+        try:
+            state.config["vehicle_toast_duration"] = max(1, int(raw))
         except ValueError:
             pass
     save_config(state.config)
