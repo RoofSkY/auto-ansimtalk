@@ -4,24 +4,15 @@
 <div class="max-w-md mx-auto bg-white dark:bg-gray-800 rounded-lg shadow p-6">
     <h2 class="text-xl font-bold mb-4">설정</h2>
 
-    <form action="/api/settings" method="post" class="space-y-4">
-        <label class="flex items-center gap-3 cursor-pointer">
-            <input type="checkbox" name="auto_search" {% if config.auto_search %}checked{% endif %} class="w-4 h-4">
-            <span>원생 차량 자동검색</span>
-        </label>
-
-        <div>
-            <label class="block text-sm text-gray-500 dark:text-gray-400 mb-1">갱신 주기 (초, 최소 5)</label>
-            <input name="auto_search_interval" type="number"
-                   value="{{ config.auto_search_interval }}" min="5"
-                   class="px-3 py-1.5 border rounded dark:bg-gray-700 dark:border-gray-600 w-32">
-        </div>
-
-        <div class="pt-2 border-t dark:border-gray-700"></div>
-
-        <label class="flex items-center gap-3 cursor-pointer">
-            <input type="checkbox" name="vehicle_toast" {% if config.vehicle_toast %}checked{% endif %} class="w-4 h-4">
+    <form action="/api/settings" method="post" class="space-y-5">
+        <label class="flex items-center justify-between cursor-pointer">
             <span>입출차 토스트 알림</span>
+            <span class="relative inline-block h-7 w-14 shrink-0">
+                <input type="checkbox" name="vehicle_toast" class="peer sr-only"
+                       {% if config.vehicle_toast %}checked{% endif %}>
+                <span class="absolute inset-0 rounded-full bg-gray-300 dark:bg-gray-600 peer-checked:bg-blue-600 transition-colors"></span>
+                <span class="absolute left-1 top-1 h-5 w-5 rounded-full bg-white shadow transition-transform peer-checked:translate-x-7"></span>
+            </span>
         </label>
 
         <div>
@@ -31,15 +22,55 @@
                    class="px-3 py-1.5 border rounded dark:bg-gray-700 dark:border-gray-600 w-32">
         </div>
 
+        <div class="pt-2 border-t dark:border-gray-700"></div>
+
+        <label class="flex items-center justify-between cursor-pointer">
+            <span>원생 차량 자동검색</span>
+            <span class="relative inline-block h-7 w-14 shrink-0">
+                <input type="checkbox" name="auto_search" class="peer sr-only"
+                       {% if config.auto_search %}checked{% endif %}>
+                <span class="absolute inset-0 rounded-full bg-gray-300 dark:bg-gray-600 peer-checked:bg-blue-600 transition-colors"></span>
+                <span class="absolute left-1 top-1 h-5 w-5 rounded-full bg-white shadow transition-transform peer-checked:translate-x-7"></span>
+            </span>
+        </label>
+
+        <div class="pt-2 border-t dark:border-gray-700"></div>
+
+        <label class="flex items-center justify-between cursor-pointer">
+            <span>등하원 상태 동기화</span>
+            <span class="relative inline-block h-7 w-14 shrink-0">
+                <input type="checkbox" name="att_sync" class="peer sr-only"
+                       {% if config.att_sync %}checked{% endif %}>
+                <span class="absolute inset-0 rounded-full bg-gray-300 dark:bg-gray-600 peer-checked:bg-blue-600 transition-colors"></span>
+                <span class="absolute left-1 top-1 h-5 w-5 rounded-full bg-white shadow transition-transform peer-checked:translate-x-7"></span>
+            </span>
+        </label>
+
+        <div class="pt-2 border-t dark:border-gray-700"></div>
+
+        <div>
+            <label class="block text-sm text-gray-500 dark:text-gray-400 mb-1">
+                갱신 주기 (초, 최소 10) — 차량 자동검색 · 등하원 상태
+            </label>
+            <input name="refresh_interval" type="number"
+                   value="{{ config.refresh_interval }}" min="10"
+                   class="px-3 py-1.5 border rounded dark:bg-gray-700 dark:border-gray-600 w-32">
+        </div>
+
         <button class="px-4 py-2 bg-blue-500 hover:bg-blue-600 text-white rounded">저장</button>
     </form>
 
-    <div class="mt-8 pt-4 border-t dark:border-gray-700 text-sm">
-        <h3 class="font-semibold mb-2">관리 페이지</h3>
+    <div class="mt-8 pt-4 border-t dark:border-gray-700">
+        <h3 class="font-semibold mb-3 text-sm">관리 페이지</h3>
         <div class="flex gap-3">
-            <a href="/students" class="text-blue-500 hover:underline">원생 관리</a>
-            <span class="text-gray-300 dark:text-gray-600">·</span>
-            <a href="/schedules" class="text-blue-500 hover:underline">예약 관리</a>
+            <a href="/students"
+               class="px-4 py-2 bg-blue-500 hover:bg-blue-600 text-white rounded text-sm">
+                원생 관리
+            </a>
+            <a href="/schedules"
+               class="px-4 py-2 bg-blue-500 hover:bg-blue-600 text-white rounded text-sm">
+                차량 예약 등록 관리
+            </a>
         </div>
     </div>
 
@@ -63,7 +94,7 @@ async function shutdownServer() {
         document.body.innerHTML =
             '<div style="padding:3rem;text-align:center;font-family:Malgun Gothic,sans-serif">' +
             '<h2 style="font-size:1.5rem;margin-bottom:1rem">서버가 종료되었습니다.</h2>' +
-            '<p style="color:#666">다시 시작하려면 [시작.bat] 을 실행하세요.</p>' +
+            '<p style="color:#666">다시 시작하려면 [start.bat] 을 실행하세요.</p>' +
             '</div>';
     }, 400);
 }

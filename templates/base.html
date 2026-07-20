@@ -15,21 +15,32 @@
     <style>
         body { font-family: 'Malgun Gothic', -apple-system, sans-serif; }
         .log-mono { font-family: Consolas, 'D2Coding', monospace; }
+        [x-cloak] { display: none !important; }
     </style>
 </head>
 <body class="bg-gray-100 text-gray-900 dark:bg-gray-900 dark:text-gray-100 min-h-screen">
-    <header class="bg-white dark:bg-gray-800 border-b dark:border-gray-700 px-6 py-3 flex items-center sticky top-0 z-10">
-        <h1 class="text-xl font-bold flex-1">
+    <header class="bg-white dark:bg-gray-800 border-b dark:border-gray-700 px-6 py-3 flex items-center sticky top-0 z-10 relative">
+        <h1 class="text-xl font-bold">
             <a href="/" class="hover:text-blue-500">등하원차량등록</a>
         </h1>
-        <nav class="flex gap-1 items-center">
-            <a href="/students" class="px-3 py-1.5 hover:bg-gray-100 dark:hover:bg-gray-700 rounded text-sm">원생</a>
-            <a href="/schedules" class="px-3 py-1.5 hover:bg-gray-100 dark:hover:bg-gray-700 rounded text-sm">예약</a>
-            <a href="/settings" class="px-3 py-1.5 hover:bg-gray-100 dark:hover:bg-gray-700 rounded text-sm">설정</a>
-            <button @click="dark = !dark" class="px-3 py-1.5 hover:bg-gray-100 dark:hover:bg-gray-700 rounded text-lg"
-                    :title="dark ? '라이트 모드' : '다크 모드'">
-                <span x-show="dark">☀️</span>
-                <span x-show="!dark" x-cloak>🌙</span>
+
+        <div id="header-clock"
+             class="absolute left-1/2 -translate-x-1/2 text-2xl font-bold tabular-nums tracking-wider">
+            --:--:--
+        </div>
+
+        <div class="flex-1"></div>
+
+        <nav class="flex gap-3 items-center">
+            <a href="/settings" title="설정"
+               class="px-3 py-1.5 hover:bg-gray-100 dark:hover:bg-gray-700 rounded text-xl leading-none">⚙️</a>
+            <button @click="dark = !dark" role="switch" :aria-checked="dark"
+                    :title="dark ? '라이트 모드로 전환' : '다크 모드로 전환'"
+                    class="relative inline-flex h-7 w-14 items-center rounded-full transition-colors"
+                    :class="dark ? 'bg-blue-600' : 'bg-gray-300'">
+                <span class="inline-block h-6 w-6 transform rounded-full bg-white shadow transition-transform text-sm leading-6 text-center"
+                      :class="dark ? 'translate-x-7' : 'translate-x-1'"
+                      x-text="dark ? '🌙' : '☀️'"></span>
             </button>
         </nav>
     </header>
@@ -37,6 +48,7 @@
         {% block content %}{% endblock %}
     </main>
 
+    <!-- 입출차 토스트 (전역 — 모든 페이지에서 표시) -->
     <div x-data="vehicleToasts()" x-init="connect()"
          class="fixed bottom-6 right-6 z-50 flex flex-col gap-4 items-end pointer-events-none">
         <template x-for="t in toasts" :key="t.id">
@@ -63,6 +75,16 @@
     </div>
 
     <script>
+    function tickHeaderClock() {
+        const el = document.getElementById('header-clock');
+        if (!el) return;
+        const d = new Date();
+        const p = n => String(n).padStart(2, '0');
+        el.textContent = `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+    }
+    tickHeaderClock();
+    setInterval(tickHeaderClock, 1000);
+
     function vehicleToasts() {
         return {
             toasts: [],
@@ -92,9 +114,5 @@
         };
     }
     </script>
-
-    <style>
-        [x-cloak] { display: none !important; }
-    </style>
 </body>
 </html>

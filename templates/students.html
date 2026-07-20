@@ -4,7 +4,6 @@
 <div class="max-w-4xl mx-auto bg-white dark:bg-gray-800 rounded-lg shadow p-6">
     <h2 class="text-xl font-bold mb-4">원생 관리</h2>
 
-    <!-- 추가 -->
     <form action="/api/students" method="post" class="mb-6 p-3 bg-gray-50 dark:bg-gray-700 rounded flex gap-2 items-end flex-wrap">
         <div>
             <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">이름</label>
@@ -21,7 +20,6 @@
         <button class="px-4 py-1.5 bg-blue-500 hover:bg-blue-600 text-white rounded">추가</button>
     </form>
 
-    <!-- 목록 -->
     <div class="space-y-2">
         {% for s in students %}
         <div class="flex gap-2 items-center bg-gray-50 dark:bg-gray-700 rounded p-2">

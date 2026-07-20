@@ -2,26 +2,38 @@
 {% block content %}
 <div x-data="mainApp()" class="grid grid-cols-1 lg:grid-cols-2 gap-4">
 
-    <!-- 좌측: 원생 목록 -->
     <section class="bg-white dark:bg-gray-800 rounded-lg shadow p-4 flex flex-col" style="height: calc(100vh - 7rem)">
         <div class="flex items-center justify-between mb-3 gap-2">
             <h2 class="font-bold text-lg whitespace-nowrap">원생 목록</h2>
             <input type="text" x-model="searchQuery" placeholder="이름 검색"
                 class="flex-1 px-3 py-1 border rounded dark:bg-gray-700 dark:border-gray-600 text-sm">
+            <button @click="manualRefresh($event)" title="새로고침 (다음 자동 새로고침까지 남은 초)"
+                    class="px-3 py-1 bg-blue-500 hover:bg-blue-600 active:bg-blue-700 text-white rounded text-sm whitespace-nowrap flex items-center gap-1.5 tabular-nums">
+                <span>⟳</span>
+                <span x-text="refreshRemaining > 0 ? refreshRemaining + '초' : '…'"></span>
+            </button>
         </div>
         <div class="grid grid-cols-12 gap-2 text-xs font-bold text-gray-500 dark:text-gray-400 px-2 mb-1 border-b dark:border-gray-700 pb-1">
-            <span class="col-span-3">이름</span>
-            <span class="col-span-2">출석번호</span>
-            <span class="col-span-3">차량번호</span>
+            <span class="col-span-2">이름</span>
+            <span class="col-span-2">출결상태</span>
+            <span class="col-span-2">등원</span>
+            <span class="col-span-2">하원</span>
             <span class="col-span-4"></span>
         </div>
         <div class="space-y-1 overflow-y-auto flex-1">
             <template x-for="s in filteredStudents" :key="s.originalIndex">
                 <div class="grid grid-cols-12 gap-2 items-center p-2 rounded text-sm transition-colors"
                      :class="isParked(s) ? 'bg-green-300 dark:bg-green-700' : 'bg-gray-50 dark:bg-gray-700/50'">
-                    <span x-text="s.name" class="col-span-3 font-semibold truncate"></span>
-                    <span x-text="s.code" class="col-span-2 text-gray-600 dark:text-gray-400"></span>
-                    <span x-text="(s.car_no4s||[]).join(', ')" class="col-span-3 text-gray-600 dark:text-gray-400 truncate"></span>
+                    <span x-text="s.name" class="col-span-2 font-semibold truncate"></span>
+                    <span class="col-span-2">
+                        <span class="inline-block w-14 text-center py-0.5 rounded-full text-xs font-semibold border"
+                              :class="badgeClass(statusOf(s))"
+                              x-text="statusOf(s)"></span>
+                    </span>
+                    <span class="col-span-2 text-gray-600 dark:text-gray-400 truncate tabular-nums"
+                          x-text="inTimeOf(s)"></span>
+                    <span class="col-span-2 text-gray-600 dark:text-gray-400 truncate tabular-nums"
+                          x-text="outTimeOf(s)"></span>
                     <div class="col-span-4 flex gap-1 justify-end">
                         <button @click="doAction(s.originalIndex, 'attendance', $event)"
                                 class="px-2 py-1 bg-blue-500 hover:bg-blue-600 active:bg-blue-700 text-white rounded text-xs">
@@ -41,7 +53,6 @@
         </div>
     </section>
 
-    <!-- 우측: 로그 -->
     <section class="bg-white dark:bg-gray-800 rounded-lg shadow p-4 flex flex-col" style="height: calc(100vh - 7rem)">
         <div class="flex items-center justify-between mb-3">
             <h2 class="font-bold text-lg">로그</h2>
@@ -62,7 +73,7 @@
              x-ref="logBox" @scroll="onLogScroll">
             <template x-for="(log, i) in filteredLogs" :key="i">
                 <div :class="log.ok ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'"
-                     x-text="`[${log.time}] [${log.type}] ${log.target} — ${log.message}`"></div>
+                     x-text="`[${log.time}] [${log.type}] ${log.target} - ${log.message}`"></div>
             </template>
             <div x-show="filteredLogs.length === 0" class="text-gray-500 text-center py-8">
                 표시할 로그가 없습니다.
@@ -104,6 +115,9 @@ function mainApp() {
         students: {{ students | tojson }},
         logs: {{ logs | tojson }},
         inCars: new Set({{ in_cars | tojson }}),
+        attStatus: {{ att_status | tojson }},
+        attTimes: {{ att_times | tojson }},
+        refreshRemaining: {{ att_refresh_remaining }},
         searchQuery: '',
         currentTab: 'all',
         autoScroll: true,
@@ -120,6 +134,9 @@ function mainApp() {
         init() {
             this.connectSSE();
             this.$nextTick(() => this.scrollToBottom(true));
+            setInterval(() => {
+                if (this.refreshRemaining > 0) this.refreshRemaining--;
+            }, 1000);
         },
 
         connectSSE() {
@@ -135,6 +152,17 @@ function mainApp() {
                     }
                 } else if (msg.type === 'in_cars') {
                     this.inCars = new Set(msg.data.cars);
+                } else if (msg.type === 'att_status') {
+                    this.attStatus[msg.data.key] = msg.data.status;
+                    this.attTimes[msg.data.key] = {
+                        in: msg.data.in_time || '',
+                        out: msg.data.out_time || '',
+                    };
+                } else if (msg.type === 'refreshed') {
+                    this.refreshRemaining = msg.data.next_in || 0;
+                } else if (msg.type === 'att_reset') {
+                    this.attStatus = {};
+                    this.attTimes = {};
                 }
             };
             es.onerror = () => {
@@ -148,6 +176,31 @@ function mainApp() {
                 if (this.inCars.has(c)) return true;
             }
             return false;
+        },
+
+        keyOf(s) {
+            return (s.code || '').trim() || (s.name || '').trim();
+        },
+
+        statusOf(s) {
+            return this.attStatus[this.keyOf(s)] || '미등원';
+        },
+
+        badgeClass(st) {
+            if (st === '등원') return 'bg-sky-300 text-sky-900 border-sky-400';
+            if (st === '하원') return 'bg-yellow-200 text-yellow-900 border-yellow-300';
+            if (st === '결석' || st === '공결' || st === '캠프') return 'bg-red-500 text-white border-red-600';
+            return 'bg-white text-gray-500 border-gray-300 dark:bg-gray-800 dark:text-gray-400 dark:border-gray-600';
+        },
+
+        inTimeOf(s) {
+            const t = this.attTimes[this.keyOf(s)];
+            return t ? (t.in || '').trim() : '';
+        },
+
+        outTimeOf(s) {
+            const t = this.attTimes[this.keyOf(s)];
+            return t ? (t.out || '').trim() : '';
         },
 
         get filteredStudents() {
@@ -178,6 +231,19 @@ function mainApp() {
             if (!box) return;
             const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 5;
             this.autoScroll = atBottom;
+        },
+
+        async manualRefresh(ev) {
+            const btn = ev.currentTarget;
+            btn.disabled = true;
+            btn.classList.add('opacity-50');
+            try {
+                await fetch('/api/refresh', { method: 'POST' });
+            } catch (e) {}
+            setTimeout(() => {
+                btn.disabled = false;
+                btn.classList.remove('opacity-50');
+            }, 800);
         },
 
         async doAction(idx, action, ev) {
