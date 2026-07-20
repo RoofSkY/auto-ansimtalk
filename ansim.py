@@ -254,6 +254,17 @@ def _try_register(code: str) -> tuple[bool, str, bool]:
     return False, msg1 or f"미상 응답: RESULT={result!r}", False
 
 
+def reset_session() -> None:
+    """자격증명 변경 시 캐시된 세션/설정 초기화 — 다음 호출에서 새로 로그인."""
+    global _session, _config
+    _session = None
+    _config = None
+    try:
+        ANSIM_SESSION_PATH.unlink()
+    except OSError:
+        pass
+
+
 def register(code: str) -> bool:
     """출석번호 4자리로 등하원 등록. 상세 메시지는 LAST_MESSAGE 참조."""
     global LAST_MESSAGE

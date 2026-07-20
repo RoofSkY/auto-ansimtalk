@@ -253,7 +253,8 @@ function mainApp() {
             btn.classList.add('opacity-50');
             try {
                 await fetch(`/api/students/${idx}/${action}`, { method: 'POST' });
-                this.refreshRemaining = 0;   // 액션 완료 후 서버가 갱신 → refreshed 로 리셋
+                // 등하원처리만 완료 후 서버가 즉시 갱신 → refreshed 로 리셋 (차량등록은 갱신 없음)
+                if (action === 'attendance') this.refreshRemaining = 0;
             } finally {
                 setTimeout(() => {
                     btn.disabled = false;

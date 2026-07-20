@@ -141,6 +141,13 @@ def fetch_students(day: str | None = None) -> list[dict]:
             return _fetch(_session, day)
 
 
+def reset_session() -> None:
+    """자격증명 변경 시 캐시된 세션 초기화 — 다음 호출에서 새로 로그인."""
+    global _session
+    with _lock:
+        _session = None
+
+
 def fetch_status_map(day: str | None = None) -> dict[str, dict]:
     """출결번호(keypad) → 출결 정보 dict."""
     return {s["keypad"]: s for s in fetch_students(day) if s["keypad"]}

@@ -23,6 +23,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 import uvicorn
 
+import auth
 import npdc
 import ansim
 import ansim_web
@@ -227,8 +228,10 @@ class State:
         self._poll_initialized = False
         self._sched_last_run: dict[str, str] = {}
 
-        # 수동/액션 트리거로 갱신 루프를 즉시 깨우는 이벤트
+        # 수동/액션 트리거로 갱신 루프를 즉시 깨우는 이벤트.
+        # wake_tasks 로 이번 수동 갱신에서 실행할 작업을 지정 ("att" / "vehicle")
         self.refresh_wake = threading.Event()
+        self.wake_tasks: set[str] = set()
         self.next_refresh_ts: float = 0.0
 
         self.sse_subscribers: list[asyncio.Queue] = []
@@ -327,12 +330,18 @@ def _notify_vehicle(kind: str, name: str, car: str) -> None:
 
 
 # ---------- 액션 (백그라운드 스레드에서 실행) ----------
-def _run_action_then_refresh(fn, *args) -> None:
-    """액션 실행 후 상태/차량 폴링을 즉시 깨워 화면을 갱신."""
+def _trigger_refresh(*tasks: str) -> None:
+    """갱신 루프를 즉시 깨움. tasks 미지정 시 전체("att"+"vehicle") 갱신."""
+    state.wake_tasks |= set(tasks) or {"att", "vehicle"}
+    state.refresh_wake.set()
+
+
+def _run_action_then_refresh(fn, args, tasks: tuple[str, ...]) -> None:
+    """액션 실행 완료 후 해당 범위만 즉시 갱신 (등하원→att, 차량→vehicle)."""
     try:
         fn(*args)
     finally:
-        state.refresh_wake.set()
+        _trigger_refresh(*tasks)
 
 
 def do_attendance(student: dict, tag: str = "안심톡") -> None:
@@ -443,15 +452,17 @@ def refresh_loop():
     수동 새로고침/등하원처리/차량등록 시 refresh_wake 로 즉시 깨어나
     (설정 스위치가 꺼져 있어도) 한 번 갱신하고 카운트다운을 리셋한다.
     """
-    manual = False
+    manual_tasks: set[str] | None = None  # None = 주기 도래(스위치 따름), set = 수동 트리거 범위
     while True:
         # 등하원 동기화를 먼저 — 빠르게 끝나서 배지가 즉시 갱신됨
-        if manual or state.config.get("att_sync", True):
+        if (manual_tasks is not None and "att" in manual_tasks) or \
+                (manual_tasks is None and state.config.get("att_sync", True)):
             try:
                 _att_sync_once()
             except Exception as e:
                 print(f"등하원 상태 동기화 오류: {e}", file=sys.stderr)
-        if manual or state.config.get("auto_search"):
+        if (manual_tasks is not None and "vehicle" in manual_tasks) or \
+                (manual_tasks is None and state.config.get("auto_search")):
             try:
                 _poll_once()
             except Exception as e:
@@ -462,9 +473,12 @@ def refresh_loop():
             interval = 60
         state.next_refresh_ts = time.time() + interval
         emit_event("refreshed", {"next_in": interval})
-        manual = state.refresh_wake.wait(timeout=interval)
-        if manual:
+        if state.refresh_wake.wait(timeout=interval):
             state.refresh_wake.clear()
+            manual_tasks = state.wake_tasks or {"att", "vehicle"}
+            state.wake_tasks = set()
+        else:
+            manual_tasks = None
 
 
 def _poll_once():
@@ -694,10 +708,21 @@ async def schedules_page(request: Request):
     })
 
 
+def _load_ansim_account() -> dict:
+    if not ansim.ANSIM_CONFIG_PATH.exists():
+        return {}
+    try:
+        with open(ansim.ANSIM_CONFIG_PATH, encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
 @app.get("/settings", response_class=HTMLResponse)
 async def settings_page(request: Request):
     return templates.TemplateResponse(request, "settings.html", {
         "config": state.config,
+        "ansim_user_id": (_load_ansim_account().get("user_id") or "").strip(),
     })
 
 
@@ -708,7 +733,8 @@ async def trigger_attendance(idx: int):
         return JSONResponse({"error": "invalid index"}, status_code=400)
     student = state.students[idx]
     threading.Thread(
-        target=_run_action_then_refresh, args=(do_attendance, student), daemon=True,
+        target=_run_action_then_refresh,
+        args=(do_attendance, (student,), ("att",)), daemon=True,
     ).start()
     return {"ok": True}
 
@@ -718,16 +744,14 @@ async def trigger_vehicle(idx: int):
     if idx < 0 or idx >= len(state.students):
         return JSONResponse({"error": "invalid index"}, status_code=400)
     student = state.students[idx]
-    threading.Thread(
-        target=_run_action_then_refresh, args=(do_vehicle, student), daemon=True,
-    ).start()
+    threading.Thread(target=do_vehicle, args=(student,), daemon=True).start()
     return {"ok": True}
 
 
 @app.post("/api/refresh")
 async def manual_refresh():
     """수동 새로고침 — 차량 검색 + 등하원 상태 동기화를 즉시 실행."""
-    state.refresh_wake.set()
+    _trigger_refresh()
     return {"ok": True}
 
 
@@ -854,17 +878,56 @@ async def update_settings(request: Request):
     return RedirectResponse("/settings", status_code=303)
 
 
+# ---------- 계정 / 세션 ----------
+@app.post("/api/settings/ansim")
+async def update_ansim_account(user_id: str = Form(""), password: str = Form("")):
+    """안심톡 계정 저장. 비밀번호가 비어 있으면 기존 값 유지."""
+    cfg = _load_ansim_account()
+    uid = user_id.strip()
+    if uid:
+        cfg["user_id"] = uid
+    if password:
+        cfg["password"] = password
+    with open(ansim.ANSIM_CONFIG_PATH, "w", encoding="utf-8") as f:
+        json.dump(cfg, f, ensure_ascii=False, indent=2)
+    # 이전 계정의 세션이 남지 않도록 초기화 후 즉시 동기화로 검증
+    ansim.reset_session()
+    ansim_web.reset_session()
+    _trigger_refresh("att")
+    return RedirectResponse("/settings", status_code=303)
+
+
+@app.post("/api/nicepark/relogin")
+async def nicepark_relogin():
+    """Nicepark 쿠키 수동 갱신 — 서버 PC 에 로그인 브라우저를 띄움."""
+    def _run():
+        try:
+            auth.login(interactive=True)
+            emit_log("시스템", "Nicepark", "쿠키 수동 갱신 완료", True)
+        except Exception as e:
+            emit_log("시스템", "Nicepark", f"쿠키 갱신 실패: {e}", False)
+    threading.Thread(target=_run, daemon=True).start()
+    return {"ok": True}
+
+
 # ---------- SSE ----------
 @app.get("/stream")
 async def event_stream(request: Request):
     q: asyncio.Queue = asyncio.Queue(maxsize=200)
     state.sse_subscribers.append(q)
 
-    initial = {"type": "in_cars", "data": {"cars": list(state.prev_in_cars)}}
+    # 접속 시점의 현재 상태를 먼저 내려줌 — 특히 refreshed 는 브라우저가
+    # 첫 갱신 완료 방송보다 늦게 연결해도 카운트다운을 바로 받도록 필수
+    initial_msgs = [{"type": "in_cars", "data": {"cars": list(state.prev_in_cars)}}]
+    if state.next_refresh_ts > 0:
+        initial_msgs.append({"type": "refreshed", "data": {
+            "next_in": max(0, round(state.next_refresh_ts - time.time())),
+        }})
 
     async def gen():
         try:
-            yield f"data: {json.dumps(initial, ensure_ascii=False)}\n\n"
+            for m in initial_msgs:
+                yield f"data: {json.dumps(m, ensure_ascii=False)}\n\n"
             while True:
                 if await request.is_disconnected():
                     break

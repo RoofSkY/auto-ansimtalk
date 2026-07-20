@@ -75,6 +75,39 @@
     </div>
 
     <div class="mt-6 pt-4 border-t dark:border-gray-700">
+        <h3 class="font-semibold mb-3 text-sm">안심톡 계정</h3>
+        <form action="/api/settings/ansim" method="post" class="space-y-3">
+            <div>
+                <label class="block text-sm text-gray-500 dark:text-gray-400 mb-1">아이디</label>
+                <input name="user_id" value="{{ ansim_user_id }}" autocomplete="off"
+                       class="px-3 py-1.5 border rounded dark:bg-gray-700 dark:border-gray-600 w-48">
+            </div>
+            <div>
+                <label class="block text-sm text-gray-500 dark:text-gray-400 mb-1">비밀번호</label>
+                <input name="password" type="password" placeholder="변경할 때만 입력" autocomplete="new-password"
+                       class="px-3 py-1.5 border rounded dark:bg-gray-700 dark:border-gray-600 w-48">
+            </div>
+            <button class="px-4 py-1.5 bg-blue-500 hover:bg-blue-600 text-white rounded text-sm">저장</button>
+            <p class="text-xs text-gray-500 dark:text-gray-400">
+                저장 시 기존 로그인 세션이 초기화되고 새 계정으로 즉시 동기화합니다.
+            </p>
+        </form>
+    </div>
+
+    <div class="mt-6 pt-4 border-t dark:border-gray-700">
+        <h3 class="font-semibold mb-3 text-sm">나이스파크(주차) 세션</h3>
+        <button onclick="niceparkRelogin()"
+                class="px-4 py-1.5 bg-blue-500 hover:bg-blue-600 text-white rounded text-sm">
+            쿠키 수동 갱신
+        </button>
+        <span id="np-status" class="ml-2 text-xs text-gray-500 dark:text-gray-400"></span>
+        <p class="text-xs text-gray-500 dark:text-gray-400 mt-2">
+            클릭하면 이 PC에 로그인 브라우저 창이 열립니다. 로그인을 마치면 쿠키가 자동 저장되고
+            결과가 메인 화면 로그에 표시됩니다.
+        </p>
+    </div>
+
+    <div class="mt-6 pt-4 border-t dark:border-gray-700">
         <h3 class="font-semibold mb-2 text-sm">서버</h3>
         <button onclick="shutdownServer()"
                 class="px-4 py-2 bg-red-500 hover:bg-red-600 text-white rounded text-sm">
@@ -87,6 +120,16 @@
 </div>
 
 <script>
+async function niceparkRelogin() {
+    const status = document.getElementById('np-status');
+    try {
+        await fetch('/api/nicepark/relogin', { method: 'POST' });
+        status.textContent = '로그인 브라우저가 열렸습니다 — 로그인 완료 시 자동 저장됩니다.';
+    } catch (e) {
+        status.textContent = '요청 실패: ' + e;
+    }
+}
+
 async function shutdownServer() {
     if (!confirm('서버를 종료할까요? 자동 입출차 감지와 예약이 모두 멈춥니다.')) return;
     try { await fetch('/api/shutdown', { method: 'POST' }); } catch (e) {}
