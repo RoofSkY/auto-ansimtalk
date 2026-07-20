@@ -237,6 +237,7 @@ function mainApp() {
             const btn = ev.currentTarget;
             btn.disabled = true;
             btn.classList.add('opacity-50');
+            this.refreshRemaining = 0;   // '…' 표시 — refreshed 이벤트가 오면 리셋됨
             try {
                 await fetch('/api/refresh', { method: 'POST' });
             } catch (e) {}
@@ -252,6 +253,7 @@ function mainApp() {
             btn.classList.add('opacity-50');
             try {
                 await fetch(`/api/students/${idx}/${action}`, { method: 'POST' });
+                this.refreshRemaining = 0;   // 액션 완료 후 서버가 갱신 → refreshed 로 리셋
             } finally {
                 setTimeout(() => {
                     btn.disabled = false;
