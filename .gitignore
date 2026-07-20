@@ -19,9 +19,10 @@ ENV/
 Thumbs.db
 desktop.ini
 
-# ---- 런타임 세션 / 인증 (커밋 금지) ----
+# ---- 런타임 세션 / 인증 (커밋 금지 — 현재는 config/ 아래 생성, 아래는 구버전 루트 위치 호환) ----
 cookies.json
 ansim_session.json
+auth.log
 
 # ---- 설정 / 사용자 데이터 (학생 개인정보 + 자격증명 포함) ----
 config/

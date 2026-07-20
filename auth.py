@@ -1,9 +1,9 @@
 """Nicepark 세션(쿠키) 자동 관리.
 
-처음 사용 또는 만료 시 Playwright 로 브라우저를 띄워 로그인하고 cookies.json 에 저장.
-이후엔 cookies.json 을 로드해 재사용.
+처음 사용 또는 만료 시 Playwright 로 브라우저를 띄워 로그인하고
+config/cookies.json 에 저장. 이후엔 이 파일을 로드해 재사용.
 
-config.json (선택 — 있으면 헤드리스 자동 로그인):
+config/nicepark_config.json (선택 — 있으면 헤드리스 자동 로그인):
     {
         "user_id": "...",
         "password": "...",
@@ -31,9 +31,28 @@ HERE = (
     if getattr(sys, "frozen", False)
     else Path(__file__).resolve().parent
 )
-COOKIES_PATH = HERE / "cookies.json"
-CONFIG_PATH = HERE / "config.json"
-AUTH_LOG_PATH = HERE / "auth.log"
+CONFIG_DIR = HERE / "config"
+CONFIG_DIR.mkdir(exist_ok=True)
+LOGS_DIR = HERE / "logs"
+LOGS_DIR.mkdir(exist_ok=True)
+
+COOKIES_PATH = CONFIG_DIR / "cookies.json"
+CONFIG_PATH = CONFIG_DIR / "nicepark_config.json"
+AUTH_LOG_PATH = LOGS_DIR / "auth.log"
+
+
+def _migrate_legacy(old: Path, new: Path) -> None:
+    """구버전 루트 위치의 파일을 새 위치로 이동."""
+    try:
+        if old.exists() and not new.exists():
+            old.replace(new)
+    except OSError:
+        pass
+
+
+_migrate_legacy(HERE / "cookies.json", COOKIES_PATH)
+_migrate_legacy(HERE / "config.json", CONFIG_PATH)
+_migrate_legacy(HERE / "auth.log", AUTH_LOG_PATH)
 
 
 def _log(msg: str) -> None:

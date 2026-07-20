@@ -3,8 +3,8 @@
 agent-ansimtalk.gg.go.kr 서버와 직접 HTTP 통신해서 등하원을 등록.
 
 데이터 파일:
-    ansim_config.json   - 로그인 정보
-    ansim_session.json  - 세션 쿠키 캐시
+    config/ansim_config.json   - 로그인 정보
+    config/ansim_session.json  - 세션 쿠키 캐시
 
 CLI:
     python ansim.py 1234       # 등하원 등록
@@ -33,7 +33,7 @@ _HEADERS = {
     "Cache-Control": "no-cache",
 }
 
-# 캡처한 패킷의 고정 값 그대로 — 의미는 reference/ansim-packets/ 참고
+# 캡처한 패킷의 고정 값 그대로 — 의미는 _dev/ansim-packets/ 참고
 _FIXED_PARAMS = {
     "msg_gubun": "1",
     "destphone": "",
@@ -57,7 +57,15 @@ _BASE = (
 _CONFIG_DIR = _BASE / "config"
 _CONFIG_DIR.mkdir(exist_ok=True)
 ANSIM_CONFIG_PATH = _CONFIG_DIR / "ansim_config.json"
-ANSIM_SESSION_PATH = _BASE / "ansim_session.json"
+ANSIM_SESSION_PATH = _CONFIG_DIR / "ansim_session.json"
+
+# 구버전 루트 위치의 세션 캐시를 새 위치로 이동
+_legacy_session = _BASE / "ansim_session.json"
+try:
+    if _legacy_session.exists() and not ANSIM_SESSION_PATH.exists():
+        _legacy_session.replace(ANSIM_SESSION_PATH)
+except OSError:
+    pass
 
 # 마지막 register() 호출의 상세 메시지 (외부에서 읽기용)
 LAST_MESSAGE: str = ""
@@ -137,9 +145,17 @@ def _connect() -> bool:
 
 def _login() -> dict:
     """loginChk.asp — 세션 인증. SHOP_MEM_CODE 반환."""
+    uid = (_config.get("user_id") or "").strip()
+    pw = _config.get("password") or ""
+    # 서버는 빈/잘못된 자격증명에도 RESULT:"Y" 를 주면서 테스트 시설(1001)로 붙여버린다.
+    # 자격증명이 비어 있으면 조용히 엉뚱한 시설로 등록되지 않도록 여기서 명확히 차단.
+    if not uid or not pw:
+        raise RuntimeError(
+            "안심톡 자격증명 미설정 — config/ansim_config.json 에 user_id/password 를 입력하세요"
+        )
     params = {
-        "sMemId": _config["user_id"],
-        "sMemPw": _config["password"],
+        "sMemId": uid,
+        "sMemPw": pw,
     }
     res = _session.post(
         f"{BASE_URL}/loginChk.asp",

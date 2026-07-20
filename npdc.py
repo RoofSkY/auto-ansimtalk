@@ -44,10 +44,12 @@ TICKETS = {
     "free": {
         "knd": "10000120", "settle": "0", "name": "2시간",
         "label": "2시간 무료권",
+        "max": 1, "color": "#E7F3FF",  # UI 표시용 (최대 매수, 선택 색상)
     },
     "paid": {
         "knd": "10000061", "settle": "1", "name": "1시간",
         "label": "1시간 유료권",
+        "max": 3, "color": "#FFF5D8",
     },
 }
 DEFAULT_TICKET = "free"

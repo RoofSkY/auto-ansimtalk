@@ -24,6 +24,7 @@ import uvicorn
 
 import npdc
 import ansim
+import ansim_web
 
 try:
     import winsound
@@ -50,10 +51,13 @@ SOUND_DIR = HERE / "sound"
 # ---------- 기본 설정 ----------
 DEFAULT_CONFIG = {
     "auto_search": True,
-    "auto_search_interval": 60,
     "vehicle_toast": True,
     "vehicle_toast_duration": 5,
+    "att_sync": True,
+    "refresh_interval": 60,  # 차량 자동검색 + 등하원 상태 동기화 공통 갱신 주기 (초)
 }
+
+ATT_STATUSES = ["미등원", "등원", "하원", "결석", "공결", "캠프"]
 
 DAY_LABELS = ["월", "화", "수", "목", "금"]
 TICKET_DISPLAY_ORDER = ["free", "paid"]
@@ -75,6 +79,11 @@ def _parse_car_entry(s: str) -> tuple[str, str] | None:
 # ---------- 데이터 로드/저장 ----------
 def _student_sort_key(s: dict) -> str:
     return (s.get("name") or "").strip()
+
+
+def _student_key(s: dict) -> str:
+    """등하원 상태 저장 키 — 출석번호 우선, 없으면 이름."""
+    return (s.get("code") or "").strip() or (s.get("name") or "").strip()
 
 
 def load_students() -> list[dict]:
@@ -157,9 +166,20 @@ def load_config() -> dict:
         return dict(DEFAULT_CONFIG)
     try:
         with open(CONFIG_PATH, encoding="utf-8") as f:
-            return {**DEFAULT_CONFIG, **json.load(f)}
+            raw = json.load(f)
     except Exception:
         return dict(DEFAULT_CONFIG)
+    # 구버전 마이그레이션: 나눠져 있던 두 갱신 주기를 하나로 통합
+    if "refresh_interval" not in raw:
+        legacy = raw.get("att_sync_interval") or raw.get("auto_search_interval")
+        if legacy:
+            try:
+                raw["refresh_interval"] = max(10, int(legacy))
+            except Exception:
+                pass
+    raw.pop("att_sync_interval", None)
+    raw.pop("auto_search_interval", None)
+    return {**DEFAULT_CONFIG, **raw}
 
 
 def save_config(cfg: dict) -> None:
@@ -199,10 +219,16 @@ class State:
         self.students = load_students()
         self.schedules = load_schedules()
         self.config = load_config()
+        # 등하원 상태는 메모리로만 관리 — 재시작 시 첫 동기화가 다시 채움
+        self.att = {"date": date.today().isoformat(), "status": {}, "times": {}}
         self.prev_in_cars: set[str] = set()
         self.last_seen_carNo: dict[str, str] = {}
         self._poll_initialized = False
         self._sched_last_run: dict[str, str] = {}
+
+        # 수동/액션 트리거로 갱신 루프를 즉시 깨우는 이벤트
+        self.refresh_wake = threading.Event()
+        self.next_refresh_ts: float = 0.0
 
         self.sse_subscribers: list[asyncio.Queue] = []
         self.main_loop: asyncio.AbstractEventLoop | None = None
@@ -239,6 +265,44 @@ def emit_log(kind: str, target: str, message: str, ok: bool) -> None:
     emit_event("log", entry)
 
 
+# ---------- 등하원 상태 ----------
+def _reset_att_if_new_day() -> None:
+    today = date.today().isoformat()
+    if state.att.get("date") != today:
+        state.att = {"date": today, "status": {}, "times": {}}
+        emit_event("att_reset", {})
+
+
+def set_att_status(key: str, status: str,
+                   in_time: str | None = None, out_time: str | None = None) -> None:
+    """등하원 상태(+선택적으로 등/하원 시각) 갱신 후 SSE 반영.
+
+    in_time/out_time 이 None 이면 기존 시각 유지 (수동 변경 시).
+    """
+    if not key or status not in ATT_STATUSES:
+        return
+    _reset_att_if_new_day()
+    if status == "미등원":
+        state.att["status"].pop(key, None)
+    else:
+        state.att["status"][key] = status
+    if in_time is not None or out_time is not None:
+        t = dict(state.att["times"].get(key) or {})
+        if in_time is not None:
+            t["in"] = in_time
+        if out_time is not None:
+            t["out"] = out_time
+        if t.get("in") or t.get("out"):
+            state.att["times"][key] = t
+        else:
+            state.att["times"].pop(key, None)
+    t = state.att["times"].get(key) or {}
+    emit_event("att_status", {
+        "key": key, "status": status,
+        "in_time": t.get("in", ""), "out_time": t.get("out", ""),
+    })
+
+
 # ---------- 사운드 재생 ----------
 def _play_sound(filename: str) -> None:
     if not _SOUND_AVAILABLE:
@@ -262,6 +326,14 @@ def _notify_vehicle(kind: str, name: str, car: str) -> None:
 
 
 # ---------- 액션 (백그라운드 스레드에서 실행) ----------
+def _run_action_then_refresh(fn, *args) -> None:
+    """액션 실행 후 상태/차량 폴링을 즉시 깨워 화면을 갱신."""
+    try:
+        fn(*args)
+    finally:
+        state.refresh_wake.set()
+
+
 def do_attendance(student: dict, tag: str = "안심톡") -> None:
     name = student.get("name", "")
     code = student.get("code", "")
@@ -277,9 +349,23 @@ def do_attendance(student: dict, tag: str = "안심톡") -> None:
         )
         emit_log(tag, target, msg, ok)
         _play_sound("S1.wav" if ok else "S2.wav")
+        if ok:
+            _update_att_from_message(code, msg)
     except Exception as e:
         emit_log(tag, target, f"오류: {e}", False)
         _play_sound("S2.wav")
+
+
+def _update_att_from_message(code: str, msg: str) -> None:
+    """안심톡 서버 응답 문구(등원/하원하였습니다)로 상태 네모 갱신."""
+    if "하원" in msg:
+        new_status = "하원"
+    elif "등원" in msg:
+        new_status = "등원"
+    else:
+        cur = state.att["status"].get(code, "미등원")
+        new_status = "하원" if cur == "등원" else "등원"
+    set_att_status(code, new_status)
 
 
 def do_vehicle(student: dict, tickets: dict[str, int] | None = None,
@@ -341,27 +427,41 @@ def do_vehicle(student: dict, tickets: dict[str, int] | None = None,
                     else:
                         break
                 if count > 1:
-                    summary = f"{ticket['label']} {ok_count}/{count}매 — {last_msg}"
+                    summary = f"{ticket['label']} {ok_count}/{count}매 - {last_msg}"
                 else:
-                    summary = f"{ticket['label']} — {last_msg}"
+                    summary = f"{ticket['label']} - {last_msg}"
                 emit_log(tag, car_target, summary, ok_count == count)
             except Exception as e:
                 emit_log(tag, car_target, f"{ticket['label']} 오류: {e}", False)
 
 
 # ---------- 백그라운드 루프 ----------
-def vehicle_poller_loop():
+def refresh_loop():
+    """공통 갱신 루프 — 한 주기마다 차량 자동검색 + 등하원 상태 동기화를 함께 실행.
+
+    수동 새로고침/등하원처리/차량등록 시 refresh_wake 로 즉시 깨어나
+    (설정 스위치가 꺼져 있어도) 한 번 갱신하고 카운트다운을 리셋한다.
+    """
+    manual = False
     while True:
-        if state.config.get("auto_search"):
+        if manual or state.config.get("auto_search"):
             try:
                 _poll_once()
             except Exception as e:
-                print(f"폴링 오류: {e}", file=sys.stderr)
+                print(f"차량 검색 오류: {e}", file=sys.stderr)
+        if manual or state.config.get("att_sync", True):
+            try:
+                _att_sync_once()
+            except Exception as e:
+                print(f"등하원 상태 동기화 오류: {e}", file=sys.stderr)
         try:
-            interval = int(state.config.get("auto_search_interval", 60))
+            interval = max(10, int(state.config.get("refresh_interval", 60)))
         except Exception:
             interval = 60
-        time.sleep(max(5, interval))
+        state.next_refresh_ts = time.time() + interval
+        emit_event("refreshed", {"next_in": interval})
+        manual = state.refresh_wake.wait(timeout=interval)
+        state.refresh_wake.clear()
 
 
 def _poll_once():
@@ -420,8 +520,34 @@ def _poll_once():
     emit_event("in_cars", {"cars": list(current)})
 
 
+def _att_sync_once():
+    _reset_att_if_new_day()
+    status_map = ansim_web.fetch_status_map()
+    if not status_map:
+        return
+    local_codes = {
+        (s.get("code") or "").strip()
+        for s in state.students
+        if (s.get("code") or "").strip()
+    }
+    for code, info in status_map.items():
+        if code not in local_codes:
+            continue
+        label = info["label"]
+        if label not in ATT_STATUSES:
+            continue
+        cur = state.att["status"].get(code, "미등원")
+        cur_t = state.att["times"].get(code) or {}
+        if (cur != label
+                or cur_t.get("in", "") != info["in_time"]
+                or cur_t.get("out", "") != info["out_time"]):
+            set_att_status(code, label, info["in_time"], info["out_time"])
+
+
 def scheduler_loop():
     while True:
+        _reset_att_if_new_day()
+
         now = datetime.now()
         today = now.date().isoformat()
         hhmm = now.strftime("%H:%M")
@@ -515,7 +641,7 @@ def _parse_schedule_form(form) -> dict:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     state.main_loop = asyncio.get_running_loop()
-    threading.Thread(target=vehicle_poller_loop, daemon=True).start()
+    threading.Thread(target=refresh_loop, daemon=True).start()
     threading.Thread(target=scheduler_loop, daemon=True).start()
     yield
 
@@ -528,11 +654,15 @@ app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 # ---------- 페이지 ----------
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request):
+    _reset_att_if_new_day()
     return templates.TemplateResponse(request, "index.html", {
         "students": state.students,
         "in_cars": list(state.prev_in_cars),
         "logs": load_today_logs(),
         "config": state.config,
+        "att_status": state.att["status"],
+        "att_times": state.att["times"],
+        "att_refresh_remaining": max(0, round(state.next_refresh_ts - time.time())),
     })
 
 
@@ -566,7 +696,9 @@ async def trigger_attendance(idx: int):
     if idx < 0 or idx >= len(state.students):
         return JSONResponse({"error": "invalid index"}, status_code=400)
     student = state.students[idx]
-    threading.Thread(target=do_attendance, args=(student,), daemon=True).start()
+    threading.Thread(
+        target=_run_action_then_refresh, args=(do_attendance, student), daemon=True,
+    ).start()
     return {"ok": True}
 
 
@@ -575,7 +707,27 @@ async def trigger_vehicle(idx: int):
     if idx < 0 or idx >= len(state.students):
         return JSONResponse({"error": "invalid index"}, status_code=400)
     student = state.students[idx]
-    threading.Thread(target=do_vehicle, args=(student,), daemon=True).start()
+    threading.Thread(
+        target=_run_action_then_refresh, args=(do_vehicle, student), daemon=True,
+    ).start()
+    return {"ok": True}
+
+
+@app.post("/api/refresh")
+async def manual_refresh():
+    """수동 새로고침 — 차량 검색 + 등하원 상태 동기화를 즉시 실행."""
+    state.refresh_wake.set()
+    return {"ok": True}
+
+
+@app.post("/api/students/{idx}/status")
+async def set_student_status(idx: int, status: str = Form(...)):
+    if idx < 0 or idx >= len(state.students):
+        return JSONResponse({"error": "invalid index"}, status_code=400)
+    if status not in ATT_STATUSES:
+        return JSONResponse({"error": "invalid status"}, status_code=400)
+    key = _student_key(state.students[idx])
+    set_att_status(key, status)
     return {"ok": True}
 
 
@@ -674,16 +826,17 @@ async def update_settings(request: Request):
     form = await request.form()
     state.config["auto_search"] = form.get("auto_search") == "on"
     state.config["vehicle_toast"] = form.get("vehicle_toast") == "on"
-    raw = form.get("auto_search_interval")
-    if raw:
-        try:
-            state.config["auto_search_interval"] = max(5, int(raw))
-        except ValueError:
-            pass
+    state.config["att_sync"] = form.get("att_sync") == "on"
     raw = form.get("vehicle_toast_duration")
     if raw:
         try:
             state.config["vehicle_toast_duration"] = max(1, int(raw))
+        except ValueError:
+            pass
+    raw = form.get("refresh_interval")
+    if raw:
+        try:
+            state.config["refresh_interval"] = max(10, int(raw))
         except ValueError:
             pass
     save_config(state.config)
