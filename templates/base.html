@@ -7,11 +7,9 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{% block title %}등하원차량등록{% endblock %}</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <script>
-        tailwind.config = { darkMode: 'class' };
-    </script>
-    <script defer src="https://unpkg.com/alpinejs@3.13.5/dist/cdn.min.js"></script>
+    <!-- 로컬 번들 (인터넷 없이도 UI 동작) — 정적 CSS 는 build_css.bat 로 재생성 -->
+    <link rel="stylesheet" href="/static/tailwind.css">
+    <script defer src="/static/alpine.min.js"></script>
     <style>
         body { font-family: 'Malgun Gothic', -apple-system, sans-serif; }
         .log-mono { font-family: Consolas, 'D2Coding', monospace; }

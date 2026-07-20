@@ -87,7 +87,9 @@ auto-ansimtalk/
 ├─ npdc.py             # Nicepark — 입차 조회·주차 할인권 등록
 ├─ auth.py             # Nicepark 로그인 세션(쿠키) 관리
 ├─ start.bat           # 실행 스크립트 (백그라운드)
+├─ build_css.bat       # 화면 수정 시 static/tailwind.css 재생성 (아래 참고)
 ├─ templates/          # 화면 (Jinja2 + Tailwind + Alpine.js)
+├─ static/             # 로컬 정적 자원 (tailwind.css, alpine.min.js — 오프라인 동작)
 ├─ sound/              # S1.Wav(성공) / S2.Wav(실패)
 ├─ config/             # 설정·데이터 (gitignore — 개인정보/자격증명 포함)
 │   ├─ ansim_config.json    # 안심톡 계정 (직접 작성)
@@ -98,6 +100,17 @@ auto-ansimtalk/
 │   └─ ansim_session.json   # 안심톡 세션 (자동 생성)
 └─ logs/               # 날짜별 작업 로그·진단 로그 (gitignore)
 ```
+
+## 화면(CSS) 수정 시
+
+스타일은 빌드된 정적 CSS(`static/tailwind.css`)로 서빙됩니다. `templates/` 에서 Tailwind 클래스를 추가·변경했다면 재빌드가 필요합니다:
+
+```bat
+build_css.bat
+```
+
+빌드 도구는 Tailwind v3 standalone CLI 로, `_dev/tailwindcss.exe` 에 두면 됩니다 (없으면
+https://github.com/tailwindlabs/tailwindcss/releases/download/v3.4.17/tailwindcss-windows-x64.exe 다운로드 후 이름 변경).
 
 ## 참고 사항
 
@@ -112,6 +125,6 @@ auto-ansimtalk/
 |---|---|
 | 등하원 등록이 "학생정보 없음" 실패 | `config/ansim_config.json` 자격증명 확인. 빈 계정으로 로그인되면 엉뚱한 시설로 붙습니다 |
 | 등하원 등록이 "자격증명 미설정" 실패 | `config/ansim_config.json` 파일 생성 여부 확인 |
-| 차량 조회가 계속 실패 | Nicepark 세션 만료 — `python auth.py` 로 재로그인 |
+| 차량 조회가 계속 실패 | Nicepark 세션 만료 — 설정 페이지의 "쿠키 수동 갱신" 버튼 (또는 `python auth.py`) |
 | 상태 배지가 갱신되지 않음 | 설정에서 "등하원 상태 동기화" 스위치 확인, 새로고침 버튼으로 즉시 갱신 |
 | 세션이 꼬인 것 같을 때 | `config/ansim_session.json`, `config/cookies.json` 삭제 후 재시작/재로그인 |
