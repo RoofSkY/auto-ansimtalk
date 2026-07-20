@@ -9,6 +9,7 @@ import os
 import sys
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 import urllib.request
 import uuid
 import webbrowser
@@ -444,16 +445,17 @@ def refresh_loop():
     """
     manual = False
     while True:
-        if manual or state.config.get("auto_search"):
-            try:
-                _poll_once()
-            except Exception as e:
-                print(f"차량 검색 오류: {e}", file=sys.stderr)
+        # 등하원 동기화를 먼저 — 빠르게 끝나서 배지가 즉시 갱신됨
         if manual or state.config.get("att_sync", True):
             try:
                 _att_sync_once()
             except Exception as e:
                 print(f"등하원 상태 동기화 오류: {e}", file=sys.stderr)
+        if manual or state.config.get("auto_search"):
+            try:
+                _poll_once()
+            except Exception as e:
+                print(f"차량 검색 오류: {e}", file=sys.stderr)
         try:
             interval = max(10, int(state.config.get("refresh_interval", 60)))
         except Exception:
@@ -461,7 +463,8 @@ def refresh_loop():
         state.next_refresh_ts = time.time() + interval
         emit_event("refreshed", {"next_in": interval})
         manual = state.refresh_wake.wait(timeout=interval)
-        state.refresh_wake.clear()
+        if manual:
+            state.refresh_wake.clear()
 
 
 def _poll_once():
@@ -479,12 +482,20 @@ def _poll_once():
             by_last4.setdefault(last4, []).append(c)
     tracked = set(entry_to_student.keys())
 
+    def _query(last4: str):
+        try:
+            return npdc.find_in_cars(last4)
+        except Exception:
+            return None
+
+    # last4 별 순차 조회는 원생 수에 비례해 느려짐 (~0.5초×N) — 병렬로 단축
+    last4_list = list(by_last4.keys())
+    with ThreadPoolExecutor(max_workers=8) as ex:
+        results = dict(zip(last4_list, ex.map(_query, last4_list)))
+
     current: set[str] = set()
     for last4, entries in by_last4.items():
-        try:
-            cars = npdc.find_in_cars(last4)
-        except Exception:
-            continue
+        cars = results.get(last4)
         if not cars:
             continue
         for entry in entries:
