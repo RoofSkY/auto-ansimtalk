@@ -108,14 +108,21 @@ def _fetch(session: requests.Session, day: str) -> list[dict]:
         state = (d.get("ATTENDANCE_STATE") or "").strip()
         in_time = (d.get("SDATE") or "").strip()
         out_time = (d.get("EDATE") or "").strip()
+        if out_time == "30:00":
+            out_time = ""
+        label = STATE_LABELS.get(state, f"미상({state})")
+        # 서버는 하원해도 ATTENDANCE_STATE 를 "1" 로 유지하고 EDATE 만 채움 —
+        # 하원 여부는 하원시간 존재로 판정 (2026-07-20 실데이터로 확인)
+        if state == "1" and out_time:
+            label = "하원"
         out.append({
             "keypad": (d.get("KEYPAD_NUM") or "").strip(),
             "name": (d.get("STUDENT_NAME") or "").strip(),
             "class_name": (d.get("CLASS_NAME") or "").strip(),
             "state": state,
-            "label": STATE_LABELS.get(state, f"미상({state})"),
+            "label": label,
             "in_time": "" if in_time == "30:00" else in_time,  # 30:00 = 시각 없음 표기
-            "out_time": "" if out_time == "30:00" else out_time,
+            "out_time": out_time,
         })
     return out
 
