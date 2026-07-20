@@ -12,12 +12,22 @@
 
 import sys
 import json
+from http.cookiejar import DefaultCookiePolicy
+
 import requests
+from requests.adapters import HTTPAdapter
 
 from auth import ensure_session, cookies_to_header, login, load_cookies
 
 
 BASE_URL = "https://npdc-i.nicepark.co.kr"
+
+# keep-alive 연결 재사용 세션 — 요청마다 TLS 핸드셰이크를 새로 하지 않도록.
+# 인증 쿠키는 cookies.json 에서 Cookie 헤더로 직접 넣으므로, 응답의 Set-Cookie 가
+# jar 에 쌓여 수동 헤더를 덮어쓰지 않게 쿠키 저장을 차단한다.
+_session = requests.Session()
+_session.cookies.set_policy(DefaultCookiePolicy(allowed_domains=[]))
+_session.mount("https://", HTTPAdapter(pool_connections=4, pool_maxsize=16))
 
 COMMON_HEADERS = {
     "Accept": "application/json",
@@ -71,7 +81,7 @@ def _post(path: str, payload: dict, submission_id: str,
     headers["Cookie"] = cookies_to_header(cookies)
     headers["submissionid"] = submission_id
 
-    res = requests.post(
+    res = _session.post(
         BASE_URL + path,
         headers=headers,
         data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
