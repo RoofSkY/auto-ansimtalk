@@ -9,7 +9,7 @@ PyInstaller 로 단독 exe(AnsimTalk-Setup.exe)로 빌드해 배포한다 —
   3. pip 로 requirements.txt 설치
   4. 시작 메뉴/바탕화면 바로가기, (선택) Windows 시작 시 자동 실행 등록
 
-표준 라이브러리만 사용 (requests 등 외부 패키지 금지 — exe 크기/의존성 최소화).
+표준 라이브러리 + certifi(CA 번들, SSL 검증 폴백용)만 사용 — exe 크기/의존성 최소화.
 
 테스트/무인 설치용 CLI:
   setup.py --silent [--dir 경로] [--zip 로컬zip] [--no-desktop] [--autostart]
@@ -21,6 +21,7 @@ import json
 import os
 import re
 import shutil
+import ssl
 import subprocess
 import sys
 import tempfile
@@ -68,6 +69,48 @@ def _run_hidden(cmd, **kw):
     return subprocess.run(cmd, **kw)
 
 
+# Windows 루트 인증서 저장소가 오래된 PC 에서는 기본 검증이
+# CERTIFICATE_VERIFY_FAILED 로 실패한다 — certifi CA 번들로 한 번 더 시도.
+_SSL_CTX: ssl.SSLContext | None = None
+_ALLOW_INSECURE = False  # --insecure (최후 수단, 검증 생략)
+
+
+def _is_cert_error(e: Exception) -> bool:
+    s = str(e)
+    return "CERTIFICATE_VERIFY_FAILED" in s or "certificate verify failed" in s
+
+
+def _urlopen(req: urllib.request.Request, timeout: float):
+    global _SSL_CTX
+    if _SSL_CTX is not None:
+        return urllib.request.urlopen(req, timeout=timeout, context=_SSL_CTX)
+    try:
+        return urllib.request.urlopen(req, timeout=timeout)
+    except urllib.error.URLError as e:
+        if not _is_cert_error(e):
+            raise
+    try:
+        import certifi
+        ctx = ssl.create_default_context(cafile=certifi.where())
+        resp = urllib.request.urlopen(req, timeout=timeout, context=ctx)
+        _SSL_CTX = ctx
+        return resp
+    except urllib.error.URLError as e:
+        if not _is_cert_error(e):
+            raise
+        if _ALLOW_INSECURE:
+            ctx = ssl._create_unverified_context()
+            resp = urllib.request.urlopen(req, timeout=timeout, context=ctx)
+            _SSL_CTX = ctx
+            return resp
+        raise RuntimeError(
+            "보안 연결(SSL) 인증서 확인에 실패했습니다.\n"
+            "- Windows 업데이트를 실행해 루트 인증서를 갱신한 뒤 다시 시도하세요.\n"
+            "- 사내/기관 네트워크의 보안 장비가 원인일 수도 있습니다 (관리자 문의).\n"
+            "- 임시 우회: 명령창에서 AnsimTalk-Setup.exe --silent --insecure"
+        ) from e
+
+
 def _github_request(url: str, token: str, accept: str) -> urllib.request.Request:
     req = urllib.request.Request(url, headers={"User-Agent": APP_NAME, "Accept": accept})
     if token:
@@ -77,7 +120,7 @@ def _github_request(url: str, token: str, accept: str) -> urllib.request.Request
 
 def _download(url: str, dest: Path, token: str = "", accept: str = "application/octet-stream",
               progress=None) -> None:
-    with urllib.request.urlopen(_github_request(url, token, accept), timeout=30) as r, \
+    with _urlopen(_github_request(url, token, accept), timeout=30) as r, \
             open(dest, "wb") as f:
         total = int(r.headers.get("Content-Length") or 0)
         done = 0
@@ -160,15 +203,13 @@ def get_latest_release(token: str) -> dict:
     accept = "application/vnd.github+json"
     try:
         try:
-            with urllib.request.urlopen(
-                    _github_request(base + "/latest", token, accept), timeout=15) as r:
+            with _urlopen(_github_request(base + "/latest", token, accept), timeout=15) as r:
                 data = json.loads(r.read().decode("utf-8"))
         except urllib.error.HTTPError as e:
             # releases/latest 는 pre-release 를 제외 — 404 면 목록에서 최신 것을 사용
             if e.code != 404:
                 raise
-            with urllib.request.urlopen(
-                    _github_request(base + "?per_page=10", token, accept), timeout=15) as r:
+            with _urlopen(_github_request(base + "?per_page=10", token, accept), timeout=15) as r:
                 releases = json.loads(r.read().decode("utf-8"))
             published = [d for d in releases if not d.get("draft")]
             if not published:
@@ -619,7 +660,13 @@ def main():
     ap.add_argument("--skip-pip", action="store_true", help="pip 설치 생략(테스트)")
     ap.add_argument("--no-launch", action="store_true", help="설치 후 실행 안 함")
     ap.add_argument("--token", default="", help="GitHub 토큰 (private 저장소용)")
+    ap.add_argument("--insecure", action="store_true",
+                    help="SSL 검증 실패 시 검증 없이 다운로드 (최후 수단)")
     args = ap.parse_args()
+
+    if args.insecure:
+        global _ALLOW_INSECURE
+        _ALLOW_INSECURE = True
 
     if not args.silent:
         run_gui()

@@ -13,6 +13,7 @@ import json
 import os
 import re
 import shutil
+import ssl
 import subprocess
 import sys
 import tempfile
@@ -63,6 +64,27 @@ def _request(url: str, accept: str = "application/vnd.github+json") -> urllib.re
     return req
 
 
+# Windows 루트 인증서 저장소가 오래된 PC 에서는 기본 검증이
+# CERTIFICATE_VERIFY_FAILED 로 실패 — certifi CA 번들(requests 의존성)로 재시도
+_SSL_CTX: ssl.SSLContext | None = None
+
+
+def _urlopen(req: urllib.request.Request, timeout: float):
+    global _SSL_CTX
+    if _SSL_CTX is not None:
+        return urllib.request.urlopen(req, timeout=timeout, context=_SSL_CTX)
+    try:
+        return urllib.request.urlopen(req, timeout=timeout)
+    except urllib.error.URLError as e:
+        if "certificate verify failed" not in str(e).lower():
+            raise
+    import certifi
+    ctx = ssl.create_default_context(cafile=certifi.where())
+    resp = urllib.request.urlopen(req, timeout=timeout, context=ctx)
+    _SSL_CTX = ctx
+    return resp
+
+
 # ---------- 버전 비교 ----------
 def parse_version(s: str) -> tuple[int, ...]:
     """'v1.2.3' / '1.2' 형식을 비교 가능한 튜플로. 파싱 불가 시 (0,)."""
@@ -82,12 +104,12 @@ def is_newer(latest_tag: str, current: str = __version__) -> bool:
 def _fetch_latest_release_data() -> dict:
     """releases/latest 는 pre-release 를 제외하므로, 404 면 목록에서 최신 것을 사용."""
     try:
-        with urllib.request.urlopen(_request(_API_LATEST), timeout=_TIMEOUT) as r:
+        with _urlopen(_request(_API_LATEST), timeout=_TIMEOUT) as r:
             return json.loads(r.read().decode("utf-8"))
     except urllib.error.HTTPError as e:
         if e.code != 404:
             raise
-        with urllib.request.urlopen(_request(_API_LIST), timeout=_TIMEOUT) as r:
+        with _urlopen(_request(_API_LIST), timeout=_TIMEOUT) as r:
             releases = json.loads(r.read().decode("utf-8"))
         published = [d for d in releases if not d.get("draft")]
         if not published:
@@ -146,6 +168,9 @@ def _friendly_error(e: Exception) -> str:
                 "저장소에 접근할 수 없습니다 (RELEASE.md 참고)")
     if "403" in s:
         return "GitHub API 요청 제한/권한 오류 (잠시 후 재시도)"
+    if "certificate verify failed" in s.lower():
+        return ("보안 연결(SSL) 인증서 확인 실패 — Windows 업데이트로 "
+                "루트 인증서를 갱신한 뒤 다시 시도하세요")
     return f"업데이트 확인 실패: {s}"
 
 
@@ -160,7 +185,7 @@ def _download_zip(release: dict, dest: Path, progress=None) -> Path:
         raise RuntimeError("릴리스에 다운로드 가능한 zip 이 없습니다")
 
     path = dest / release["zip_name"]
-    with urllib.request.urlopen(_request(url, accept), timeout=30) as r, \
+    with _urlopen(_request(url, accept), timeout=30) as r, \
             open(path, "wb") as f:
         total = int(r.headers.get("Content-Length") or 0)
         done = 0

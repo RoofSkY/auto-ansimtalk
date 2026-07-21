@@ -149,6 +149,7 @@
 
 - `installer/setup.py` 를 PyInstaller onefile 로 빌드한 단독 exe — 파이썬 없는 PC 지원
 - exe 에 버전 정보 리소스 포함 (`tools/make_version_file.py` 가 version.py 에서 자동 생성, `--version-file`) — 속성이 빈 서명 없는 exe 는 Defender ML 오탐(Sabsik 등)에 잘 걸리므로 완화 목적
+- **SSL 검증 폴백**: Windows 루트 인증서 저장소가 오래된 PC 에서 기본 검증이 `CERTIFICATE_VERIFY_FAILED` 로 실패하면 certifi CA 번들로 재시도 (updater 도 동일 — requests 의존성으로 항상 설치됨). 그래도 실패하면 한국어 안내 + `--insecure` 최후 수단 (설치 프로그램만)
 - 실행 시: 파이썬(3.10+) 확인 → 없으면 python.org 3.12 자동 설치(quiet) → GitHub Release 최신 zip 다운로드 → 기본 설치 경로 `문서(Documents)\auto-ansimtalk` 에 설치 (설치 화면에서 변경 가능, OneDrive 문서 폴더 이동 감지) → pip 로 requirements 설치 → 시작 메뉴/바탕화면 바로가기 → (선택) 자동 실행 등록
 - 재설치 시 `config/`, `logs/` 는 보존
 - **제거**: 설치 시 `uninstall.ps1` 생성 + HKCU Uninstall 레지스트리 등록 → Windows 설정 > 앱 > 설치된 앱에서 제거 가능. 제거 시 서버 종료·자동실행 해제·바로가기 삭제 후 폴더 삭제, 데이터(config/logs) 삭제 여부는 대화상자로 선택 (자동 업데이트 시 표시 버전도 갱신)
