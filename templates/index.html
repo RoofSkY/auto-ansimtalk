@@ -132,6 +132,8 @@ function mainApp() {
         ],
 
         init() {
+            // 보정 로그(실제 등하원 시각)가 파일에 늦게 추가돼도 표시는 시간순 유지
+            this.logs.sort((a, b) => (a.time || '').localeCompare(b.time || ''));
             this.connectSSE();
             this.$nextTick(() => this.scrollToBottom(true));
             setInterval(() => {
@@ -146,7 +148,11 @@ function mainApp() {
                 let msg;
                 try { msg = JSON.parse(e.data); } catch { return; }
                 if (msg.type === 'log') {
-                    this.logs.push(msg.data);
+                    // 시간순 위치에 삽입 — 과거 시각의 보정 로그가 맨 아래에 붙지 않도록
+                    const t = msg.data.time || '';
+                    let i = this.logs.length;
+                    while (i > 0 && (this.logs[i - 1].time || '') > t) i--;
+                    this.logs.splice(i, 0, msg.data);
                     if (this.autoScroll) {
                         this.$nextTick(() => this.scrollToBottom(false));
                     }

@@ -6,6 +6,7 @@
 import asyncio
 import json
 import os
+import re
 import sys
 import threading
 import time
@@ -229,7 +230,8 @@ class State:
         self.prev_in_cars: set[str] = set()
         self.last_seen_carNo: dict[str, str] = {}
         self._poll_initialized = False
-        self._att_sync_initialized = False
+        # 원생별 등원/하원 로그 기록 여부 — None 이면 다음 동기화 때 당일 로그에서 복원
+        self.att_logged: dict[str, dict[str, bool]] | None = None
         self._sched_last_run: dict[str, str] = {}
 
         # 수동/액션 트리거로 갱신 루프를 즉시 깨우는 이벤트.
@@ -258,9 +260,17 @@ def emit_event(event_type: str, payload: dict) -> None:
             pass
 
 
-def emit_log(kind: str, target: str, message: str, ok: bool) -> None:
+def emit_log(kind: str, target: str, message: str, ok: bool,
+             at_time: str | None = None) -> None:
+    """at_time("HH:MM") 지정 시 그 시각으로 기록 — 동기화 감지 등하원 로그가
+    감지 시점이 아닌 실제 등원/하원 시각을 갖도록."""
+    if at_time and re.fullmatch(r"\d{1,2}:\d{2}", at_time):
+        h, m = at_time.split(":")
+        time_str = f"{int(h):02d}:{m}:00"  # 시간순 문자열 비교가 되도록 2자리 패딩
+    else:
+        time_str = datetime.now().strftime("%H:%M:%S")
     entry = {
-        "time": datetime.now().strftime("%H:%M:%S"),
+        "time": time_str,
         "type": kind,
         "target": target,
         "message": message,
@@ -278,6 +288,7 @@ def _reset_att_if_new_day() -> None:
     today = date.today().isoformat()
     if state.att.get("date") != today:
         state.att = {"date": today, "status": {}, "times": {}}
+        state.att_logged = None
         emit_event("att_reset", {})
 
 
@@ -380,6 +391,10 @@ def _update_att_from_message(code: str, msg: str) -> None:
         cur = state.att["status"].get(code, "미등원")
         new_status = "하원" if cur == "등원" else "등원"
     set_att_status(code, new_status)
+    # 직접 처리한 건은 액션 로그가 이미 남으므로 동기화 로그 대상에서 제외
+    if state.att_logged is not None:
+        rec = state.att_logged.setdefault(code, {"in": False, "out": False})
+        rec["in" if new_status == "등원" else "out"] = True
 
 
 def do_vehicle(student: dict, tickets: dict[str, int] | None = None,
@@ -549,18 +564,37 @@ def _poll_once():
     emit_event("in_cars", {"cars": list(current)})
 
 
+def _build_att_logged() -> dict[str, dict[str, bool]]:
+    """오늘 로그에서 원생별 등원/하원 기록 여부를 복원 — 동기화 로그 중복 방지."""
+    logged: dict[str, dict[str, bool]] = {}
+    for e in load_today_logs():
+        if not str(e.get("type", "")).startswith("안심톡") or not e.get("ok"):
+            continue
+        parts = str(e.get("target", "")).split()
+        code = parts[0] if parts else ""
+        if not (code.isdigit() and len(code) == 4):
+            continue
+        msg = str(e.get("message", ""))
+        rec = logged.setdefault(code, {"in": False, "out": False})
+        if "등원" in msg:
+            rec["in"] = True
+        if "하원" in msg:
+            rec["out"] = True
+    return logged
+
+
 def _att_sync_once():
     _reset_att_if_new_day()
     status_map = ansim_web.fetch_status_map()
     if not status_map:
         return
+    if state.att_logged is None:
+        state.att_logged = _build_att_logged()
     local_codes = {
         (s.get("code") or "").strip()
         for s in state.students
         if (s.get("code") or "").strip()
     }
-    # 첫 동기화는 초기 상태 로드일 뿐이므로 변동 로그를 남기지 않음
-    log_changes = state._att_sync_initialized
     for code, info in status_map.items():
         if code not in local_codes:
             continue
@@ -573,13 +607,21 @@ def _att_sync_once():
                 or cur_t.get("in", "") != info["in_time"]
                 or cur_t.get("out", "") != info["out_time"]):
             set_att_status(code, label, info["in_time"], info["out_time"])
-            # 다른 기기(키패드 등)에서 찍힌 등원/하원 변동만 로그로 기록 —
-            # 일반 등하원처리 로그와 동일한 양식([안심톡] 출결번호 이름 - ...하였습니다.).
-            # 이 화면에서 직접 처리한 건은 액션 시점에 상태가 먼저 바뀌므로 여기 안 걸림
-            if log_changes and cur != label and label in ("등원", "하원"):
-                name = info.get("name") or ""
-                emit_log("안심톡", f"{code} {name}".strip(), f"{label}하였습니다.", True)
-    state._att_sync_initialized = True
+        # 로그 보정 — 다른 PC/키패드에서 처리된 등하원도 당일 로그에 없으면
+        # 실제 등원/하원 시각(SDATE/EDATE)으로 기록. 일반 등하원처리와 동일한 양식.
+        # 이 화면에서 직접 처리한 건은 액션 로그가 이미 있어 중복되지 않음.
+        # (결석/공결/캠프는 배지만 반영, 로그 없음)
+        if label in ("등원", "하원"):
+            rec = state.att_logged.setdefault(code, {"in": False, "out": False})
+            target = f"{code} {info.get('name') or ''}".strip()
+            if info["in_time"] and not rec["in"]:
+                rec["in"] = True
+                emit_log("안심톡", target, "등원하였습니다.", True,
+                         at_time=info["in_time"])
+            if label == "하원" and info["out_time"] and not rec["out"]:
+                rec["out"] = True
+                emit_log("안심톡", target, "하원하였습니다.", True,
+                         at_time=info["out_time"])
 
 
 def scheduler_loop():

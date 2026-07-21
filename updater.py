@@ -293,10 +293,10 @@ def download_and_apply(release: dict, log=print) -> None:
         zip_path = _download_zip(release, tmp_path)
         log("압축 해제 중...")
         root = safe_extract(zip_path, tmp_path / "extracted")
-        log("파일 적용 중... (config/logs 는 보존)")
+        log("파일 적용 중...")
         apply_release(root)
         LOGS_DIR.mkdir(exist_ok=True)
-        log("패키지 확인 중... (requirements.txt)")
+        log("패키지 확인 중...")
         with open(LOGS_DIR / "update.log", "a", encoding="utf-8") as f:
             f.write(f"\n===== update to {release['tag']} =====\n")
             _pip_install_requirements(HERE, f)
