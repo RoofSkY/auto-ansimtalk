@@ -116,7 +116,6 @@ def get_latest_release() -> dict:
         "tag": tag,
         "name": data.get("name") or tag,
         "notes": data.get("body") or "",
-        # 다운로드 경로: 첨부 zip 이 있으면 그걸, 없으면 소스 zipball
         "zip_url": (asset or {}).get("browser_download_url") or data.get("zipball_url") or "",
         "zip_api_url": (asset or {}).get("url") or data.get("zipball_url") or "",
         "zip_name": (asset or {}).get("name") or f"{APP_NAME}-{tag}.zip",
