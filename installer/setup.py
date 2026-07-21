@@ -39,7 +39,24 @@ PY_VERSION = "3.12.10"
 PY_URL = f"https://www.python.org/ftp/python/{PY_VERSION}/python-{PY_VERSION}-amd64.exe"
 MIN_PY = (3, 10)
 
-DEFAULT_DIR = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "Programs" / APP_NAME
+def _documents_dir() -> Path:
+    """실제 문서 폴더 경로 (OneDrive 등으로 이동된 경우 포함)."""
+    if sys.platform == "win32":
+        try:
+            import winreg
+            with winreg.OpenKey(
+                    winreg.HKEY_CURRENT_USER,
+                    r"Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders") as k:
+                val, _ = winreg.QueryValueEx(k, "Personal")
+            p = Path(os.path.expandvars(val))
+            if p.is_dir():
+                return p
+        except OSError:
+            pass
+    return Path.home() / "Documents"
+
+
+DEFAULT_DIR = _documents_dir() / APP_NAME
 CREATE_NO_WINDOW = 0x08000000 if os.name == "nt" else 0
 PRESERVE_DIRS = {"config", "logs"}
 
