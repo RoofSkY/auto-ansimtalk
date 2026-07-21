@@ -698,6 +698,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
+templates.env.globals["app_version"] = __version__  # 정적 자원 캐시 버스팅용
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 
@@ -902,12 +903,17 @@ async def update_settings(request: Request):
         except ValueError:
             pass
     save_config(state.config)
-    # 자동 실행은 앱 설정이 아니라 Windows 레지스트리(HKCU Run)로 관리
-    try:
-        autostart.set_enabled(form.get("auto_start") == "on")
-    except Exception as e:
-        print(f"자동 실행 설정 실패: {e}", file=sys.stderr)
     return RedirectResponse("/settings", status_code=303)
+
+
+@app.post("/api/settings/autostart")
+async def update_autostart(enabled: str = Form("")):
+    """자동 실행 스위치 — 켜고 끌 때마다 즉시 저장 (Windows HKCU Run 레지스트리)."""
+    try:
+        autostart.set_enabled(enabled == "1")
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+    return {"ok": True, "enabled": autostart.is_enabled()}
 
 
 # ---------- 계정 / 세션 ----------

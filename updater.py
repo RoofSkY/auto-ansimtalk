@@ -225,6 +225,21 @@ def _pip_install_requirements(install_dir: Path, log_file) -> None:
     )
 
 
+def _update_registry_version(tag: str) -> None:
+    """Windows '설치된 앱' 목록의 표시 버전을 새 버전으로 갱신 (등록돼 있을 때만)."""
+    if sys.platform != "win32":
+        return
+    import winreg
+    try:
+        key = rf"Software\Microsoft\Windows\CurrentVersion\Uninstall\{APP_NAME}"
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key, 0,
+                            winreg.KEY_SET_VALUE) as k:
+            winreg.SetValueEx(k, "DisplayVersion", 0, winreg.REG_SZ,
+                              tag.lstrip("v"))
+    except OSError:
+        pass
+
+
 def restart_app() -> None:
     """분리된 헬퍼 배치로 서버를 재시작하고 현재 프로세스를 종료."""
     pythonw = Path(sys.executable).with_name("pythonw.exe")
@@ -262,6 +277,7 @@ def download_and_apply(release: dict, log=print) -> None:
             f.write(f"\n===== update to {release['tag']} =====\n")
             _pip_install_requirements(HERE, f)
     _save_state({"attempted_tag": release["tag"]})
+    _update_registry_version(release["tag"])
     log(f"{release['tag']} 적용 완료 — 서버를 재시작합니다.")
     restart_app()
 

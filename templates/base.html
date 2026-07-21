@@ -8,8 +8,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{% block title %}등하원차량등록{% endblock %}</title>
     <!-- 로컬 번들 (인터넷 없이도 UI 동작) — 정적 CSS 는 build_css.bat 로 재생성 -->
-    <link rel="stylesheet" href="/static/tailwind.css">
-    <script defer src="/static/alpine.min.js"></script>
+    <!-- ?v= 버전 쿼리: 업데이트 후 브라우저가 구버전 CSS 캐시를 계속 쓰지 않도록 -->
+    <link rel="stylesheet" href="/static/tailwind.css?v={{ app_version }}">
+    <script defer src="/static/alpine.min.js?v={{ app_version }}"></script>
     <style>
         body { font-family: 'Malgun Gothic', -apple-system, sans-serif; }
         .log-mono { font-family: Consolas, 'D2Coding', monospace; }

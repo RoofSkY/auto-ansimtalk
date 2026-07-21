@@ -306,12 +306,127 @@ def set_autostart(python_exe: str, install_dir: Path, on: bool, log) -> None:
                 pass
 
 
+# ---------- 제거 프로그램 ----------
+# 설치 폴더에 uninstall.ps1 을 만들고 Windows "설치된 앱" 목록에 등록한다.
+# ps1 은 UTF-8(BOM) 이라 한글 안내가 가능하고, 실행 시 임시 폴더로 자신을
+# 복사해 재실행하므로 설치 폴더 전체(자기 자신 포함)를 삭제할 수 있다.
+_UNINSTALL_PS1 = """\
+param([switch]$Silent, [switch]$KeepData, [switch]$FromTemp)
+$InstallDir = '@INSTALL_DIR@'
+$AppName = '@APP_NAME@'
+$AppTitle = '@APP_TITLE@'
+
+if (-not $FromTemp) {
+    $tmp = Join-Path $env:TEMP ($AppName + '-uninstall.ps1')
+    Copy-Item -Force $PSCommandPath $tmp
+    $psArgs = @('-NoProfile','-ExecutionPolicy','Bypass','-WindowStyle','Hidden','-File',$tmp,'-FromTemp')
+    if ($Silent) { $psArgs += '-Silent' }
+    if ($KeepData) { $psArgs += '-KeepData' }
+    Start-Process powershell -ArgumentList $psArgs -WindowStyle Hidden
+    exit
+}
+
+Add-Type -AssemblyName System.Windows.Forms
+if (-not $Silent) {
+    $r = [System.Windows.Forms.MessageBox]::Show(
+        "$AppTitle 을(를) 제거할까요?", "$AppTitle 제거", 'YesNo', 'Question')
+    if ($r -ne 'Yes') { exit }
+}
+
+try { Invoke-RestMethod -Uri 'http://127.0.0.1:5000/api/shutdown' -Method Post -TimeoutSec 3 | Out-Null } catch {}
+Start-Sleep -Seconds 2
+try {
+    Get-CimInstance Win32_Process -Filter "Name like 'python%'" |
+        Where-Object { $_.CommandLine -like "*$InstallDir*" } |
+        ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+} catch {}
+
+$deleteData = $true
+if ($Silent) { $deleteData = -not $KeepData }
+else {
+    $r = [System.Windows.Forms.MessageBox]::Show(
+        "원생 목록, 계정 등 데이터(config, logs 폴더)도 함께 삭제할까요?`n`n'아니요'를 누르면 데이터는 남겨둡니다.",
+        "$AppTitle 제거", 'YesNo', 'Question')
+    $deleteData = ($r -eq 'Yes')
+}
+
+Remove-ItemProperty -Path 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run' -Name $AppName -ErrorAction SilentlyContinue
+Remove-Item -Path ('HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\' + $AppName) -Recurse -ErrorAction SilentlyContinue
+
+foreach ($d in @([Environment]::GetFolderPath('Programs'), [Environment]::GetFolderPath('Desktop'))) {
+    Remove-Item -LiteralPath (Join-Path $d ($AppTitle + '.lnk')) -Force -ErrorAction SilentlyContinue
+}
+
+if ($deleteData) {
+    Remove-Item -LiteralPath $InstallDir -Recurse -Force -ErrorAction SilentlyContinue
+} else {
+    Get-ChildItem -LiteralPath $InstallDir -Force |
+        Where-Object { $_.Name -notin @('config','logs') } |
+        Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+}
+
+if (-not $Silent) {
+    [System.Windows.Forms.MessageBox]::Show(
+        "제거가 완료되었습니다.", "$AppTitle 제거", 'OK', 'Information') | Out-Null
+}
+Remove-Item -LiteralPath $PSCommandPath -Force -ErrorAction SilentlyContinue
+"""
+
+
+def write_uninstaller(install_dir: Path) -> Path:
+    content = (_UNINSTALL_PS1
+               .replace("@INSTALL_DIR@", str(install_dir))
+               .replace("@APP_NAME@", APP_NAME)
+               .replace("@APP_TITLE@", APP_TITLE))
+    path = install_dir / "uninstall.ps1"
+    with open(path, "w", encoding="utf-8-sig", newline="\r\n") as f:
+        f.write(content)
+    return path
+
+
+def register_uninstall(install_dir: Path, log) -> None:
+    """Windows 설정 > 앱 > 설치된 앱 목록에 제거 항목 등록 (HKCU)."""
+    if sys.platform != "win32":
+        return
+    import winreg
+    uninst = write_uninstaller(install_dir)
+    version = ""
+    try:
+        m = re.search(r'__version__\s*=\s*"([^"]+)"',
+                      (install_dir / "version.py").read_text(encoding="utf-8"))
+        version = m.group(1) if m else ""
+    except OSError:
+        pass
+    try:
+        size_kb = sum(f.stat().st_size for f in install_dir.rglob("*") if f.is_file()) // 1024
+    except OSError:
+        size_kb = 0
+    cmd = (f'powershell.exe -NoProfile -ExecutionPolicy Bypass '
+           f'-WindowStyle Hidden -File "{uninst}"')
+    key_path = rf"Software\Microsoft\Windows\CurrentVersion\Uninstall\{APP_NAME}"
+    with winreg.CreateKey(winreg.HKEY_CURRENT_USER, key_path) as k:
+        for name, val in {
+            "DisplayName": APP_TITLE,
+            "DisplayVersion": version,
+            "Publisher": APP_NAME,
+            "InstallLocation": str(install_dir),
+            "DisplayIcon": str(install_dir / "static" / "app.ico"),
+            "UninstallString": cmd,
+        }.items():
+            winreg.SetValueEx(k, name, 0, winreg.REG_SZ, val)
+        winreg.SetValueEx(k, "NoModify", 0, winreg.REG_DWORD, 1)
+        winreg.SetValueEx(k, "NoRepair", 0, winreg.REG_DWORD, 1)
+        winreg.SetValueEx(k, "EstimatedSize", 0, winreg.REG_DWORD, int(size_kb))
+    log("제거 프로그램 등록 완료 (설정 > 앱 > 설치된 앱)")
+
+
 # ---------- 설치 실행 ----------
 class Options:
     def __init__(self):
         self.install_dir = DEFAULT_DIR
         self.desktop = True
         self.shortcuts = True
+        self.register = True  # Windows "설치된 앱" 제거 등록
         self.autostart = False
         self.local_zip: Path | None = None  # 테스트용 — 릴리스 대신 로컬 zip 사용
         self.token = os.environ.get("GITHUB_TOKEN", "").strip()
@@ -367,6 +482,8 @@ def run_install(opts: Options, log, progress=None) -> tuple[str, Path]:
     if opts.shortcuts:
         create_shortcuts(python_exe, opts.install_dir, opts.desktop, log)
     set_autostart(python_exe, opts.install_dir, opts.autostart, log)
+    if opts.register:
+        register_uninstall(opts.install_dir, log)
     phase(100)
     log("설치가 완료되었습니다!")
     return python_exe, opts.install_dir
@@ -490,6 +607,7 @@ def main():
     ap.add_argument("--zip", type=Path, default=None, help="릴리스 대신 로컬 zip 사용(테스트)")
     ap.add_argument("--no-desktop", action="store_true", help="바탕화면 바로가기 생략")
     ap.add_argument("--no-shortcut", action="store_true", help="바로가기 전부 생략(테스트)")
+    ap.add_argument("--no-register", action="store_true", help="제거 등록 생략(테스트)")
     ap.add_argument("--autostart", action="store_true", help="시작 시 자동 실행 등록")
     ap.add_argument("--skip-pip", action="store_true", help="pip 설치 생략(테스트)")
     ap.add_argument("--no-launch", action="store_true", help="설치 후 실행 안 함")
@@ -506,6 +624,7 @@ def main():
     opts.local_zip = args.zip
     opts.desktop = not args.no_desktop
     opts.shortcuts = not args.no_shortcut
+    opts.register = not args.no_register
     opts.autostart = args.autostart
     opts.skip_pip = args.skip_pip
     opts.launch = not args.no_launch
