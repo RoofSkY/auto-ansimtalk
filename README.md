@@ -1,17 +1,18 @@
 # auto-ansimtalk — 등하원차량등록
 
-| | |
-| --- | --- |
-| 플랫폼 | ![Python](https://img.shields.io/badge/Python-3.12%2B-3776AB?logo=python&logoColor=white) ![Windows](https://img.shields.io/badge/Windows-10%2F11-0078D6) |
-| 스택 | ![FastAPI](https://img.shields.io/badge/FastAPI-009688?logo=fastapi&logoColor=white) ![Jinja2](https://img.shields.io/badge/Jinja2-B41717?logo=jinja&logoColor=white) ![Tailwind CSS](https://img.shields.io/badge/Tailwind_CSS-v3.4-06B6D4?logo=tailwindcss&logoColor=white) ![Alpine.js](https://img.shields.io/badge/Alpine.js-3.13-77C1D2?logo=alpinedotjs&logoColor=black) ![SSE](https://img.shields.io/badge/SSE-%EC%8B%A4%EC%8B%9C%EA%B0%84_%EB%B0%98%EC%98%81-FF8C00) |
-| 연동 | ![안심톡](https://img.shields.io/badge/%EC%95%88%EC%8B%AC%ED%86%A1-%EA%B2%BD%EA%B8%B0%EB%8F%84_%EB%93%B1%ED%95%98%EC%9B%90-1E90FF) ![Nicepark](https://img.shields.io/badge/Nicepark-%EC%A3%BC%EC%B0%A8_%ED%95%A0%EC%9D%B8%EA%B6%8C-2E8B57) |
-| 용도 | ![시설 내부용](https://img.shields.io/badge/%EC%82%AC%EC%9A%A9%EB%B2%94%EC%9C%84-%EC%8B%9C%EC%84%A4_%EB%82%B4%EB%B6%80%EC%9A%A9-lightgrey) |
+|        |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 플랫폼 | ![Python](https://img.shields.io/badge/Python-3.12%2B-3776AB?logo=python&logoColor=white) ![Windows](https://img.shields.io/badge/Windows-10%2F11-0078D6)                                                                                                                                                                                                                                                                                                                      |
+| 스택   | ![FastAPI](https://img.shields.io/badge/FastAPI-009688?logo=fastapi&logoColor=white) ![Jinja2](https://img.shields.io/badge/Jinja2-B41717?logo=jinja&logoColor=white) ![Tailwind CSS](https://img.shields.io/badge/Tailwind_CSS-v3.4-06B6D4?logo=tailwindcss&logoColor=white) ![Alpine.js](https://img.shields.io/badge/Alpine.js-3.13-77C1D2?logo=alpinedotjs&logoColor=black) ![SSE](https://img.shields.io/badge/SSE-%EC%8B%A4%EC%8B%9C%EA%B0%84_%EB%B0%98%EC%98%81-FF8C00) |
+| 연동   | ![안심톡](https://img.shields.io/badge/%EC%95%88%EC%8B%AC%ED%86%A1-%EA%B2%BD%EA%B8%B0%EB%8F%84_%EB%93%B1%ED%95%98%EC%9B%90-1E90FF) ![Nicepark](https://img.shields.io/badge/Nicepark-%EC%A3%BC%EC%B0%A8_%ED%95%A0%EC%9D%B8%EA%B6%8C-2E8B57)                                                                                                                                                                                                                                    |
+| 용도   | ![시설 내부용](https://img.shields.io/badge/%EC%82%AC%EC%9A%A9%EB%B2%94%EC%9C%84-%EC%8B%9C%EC%84%A4_%EB%82%B4%EB%B6%80%EC%9A%A9-lightgrey)                                                                                                                                                                                                                                                                                                                                     |
 
 지역아동센터의 **원생 등하원 처리(안심톡)** 와 **주차 할인권 등록(Nicepark)** 을 한 화면에서 처리하는 로컬 웹 서버입니다. 브라우저에서 버튼 클릭 한 번으로 등하원 문자 발송과 주차권 등록을 실행하고, 안심톡 웹의 출결 상태를 실시간으로 동기화해 보여줍니다.
 
 ## 주요 기능
 
 ### 원생 목록 (메인 화면 좌측)
+
 - 원생별 **출결상태 배지** — 미등원(흰색) · 등원(하늘색) · 하원(연노랑) · 결석/공결/캠프(빨강)
 - **등원/하원 시간** 컬럼 (안심톡 웹에서 자동 동기화)
 - **등하원처리** 버튼 — 안심톡 서버에 출결 등록 (보호자 문자 발송)
@@ -22,10 +23,12 @@
   (등하원처리 완료 후에는 등하원 상태만 자동으로 즉시 갱신, 차량등록은 다음 주기에 반영)
 
 ### 로그 (메인 화면 우측)
+
 - 등하원/차량등록/입출차 로그를 실시간 표시, 탭으로 필터링
 - 날짜별 `logs/YYYY-MM-DD.jsonl` 저장, 재시작 시 당일 로그 복원
 
 ### 자동화
+
 - **등하원 상태 동기화** — 안심톡 웹에서 원생별 출결 상태·시간을 주기적으로 조회해 배지에 반영
 - **등하원 변동 로그** — 키패드 등 다른 기기에서 찍힌 등원/하원도 동기화 시 감지해
   일반 등하원처리와 동일한 양식(`[안심톡] 출결번호 이름 - 등원하였습니다.`)으로 로그 기록
@@ -36,31 +39,27 @@
 - 등하원 등록 성공/실패 시 사운드 알림 (`sound/S1.Wav` / `S2.Wav`)
 
 ### 기타
+
 - 헤더 중앙에 초단위 24시간 시계, 라이트/다크 모드 토글
 - 설정 페이지: 기능별 on/off 스위치, 갱신 주기, Windows 시작 시 자동 실행,
   원생 관리 / 차량 예약 등록 관리, 안심톡 계정 변경, Nicepark 쿠키 수동 갱신,
   업데이트 확인
 - **자동 업데이트** — 앱 시작 시 GitHub Release 최신 버전과 비교해 새 버전이면
-  자동 다운로드·적용 후 재시작 (설정의 "업데이트 확인" 버튼으로 수동 실행도 가능,
-  `config/`·`logs/` 는 보존)
+  자동 다운로드·적용 후 재시작
 - 시스템 트레이 아이콘으로 백그라운드 실행 (우클릭 → 종료)
 
 ## 설치
 
-### 방법 A — 설치 프로그램 (권장, 파이썬 몰라도 됨)
+### 방법 A — 설치 프로그램 (권장)
 
-[Releases](https://github.com/RoofSkY/auto-ansimtalk/releases) 에서 **AnsimTalk-Setup.exe** 를 받아 실행하면 끝:
+[Releases](https://github.com/RoofSkY/auto-ansimtalk/releases) 에서 **AnsimTalk-Setup.exe** 를 다운받아 실행:
 
-1. 파이썬이 없으면 Python 3.12 자동 설치
-2. 최신 버전 앱 다운로드 및 필요 패키지 자동 설치
-3. 시작 메뉴/바탕화면 바로가기 생성, (선택) Windows 시작 시 자동 실행 등록
-
-이후 새 버전이 릴리스되면 앱이 시작할 때 스스로 업데이트한다.
+이후 새 버전이 릴리스되면 앱이 시작할 때 스스로 업데이트됩니다.
 
 제거는 **Windows 설정 → 앱 → 설치된 앱 → 등하원차량등록 → 제거**.
 제거 시 원생 목록·계정 등 데이터(config/logs)를 함께 지울지 선택할 수 있다.
 
-### 방법 B — 수동 설치 (개발용)
+### 방법 B — 수동 설치 (for dev)
 
 요구 사항: **Windows**, **Python 3.12+**
 
@@ -90,7 +89,7 @@ playwright install chromium
 
 서버 실행 후 **설정 → 원생 관리** 에서 이름, 출석번호(안심톡 출결번호 4자리), 차량번호를 등록합니다.
 
-- 차량번호는 콤마로 여러 대 입력 가능: `0000, 0000, 0000`
+- 차량번호는 콤마로 여러 대 입력 가능: `0000, 1111, 2222`
 - 기본은 마지막 4자리만 입력, 같은 4자리 차량이 여럿이면 앞자리 포함 전체 번호판 입력: `00가0000`
 
 ## 실행
@@ -154,10 +153,10 @@ https://github.com/tailwindlabs/tailwindcss/releases/download/v3.4.17/tailwindcs
 
 ## 문제 해결
 
-| 증상 | 확인 |
-|---|---|
-| 등하원 등록이 "학생정보 없음" 실패 | `config/ansim_config.json` 자격증명 확인. 빈 계정으로 로그인되면 엉뚱한 시설로 붙습니다 |
-| 등하원 등록이 "자격증명 미설정" 실패 | `config/ansim_config.json` 파일 생성 여부 확인 |
-| 차량 조회가 계속 실패 | Nicepark 세션 만료 — 설정 페이지의 "쿠키 수동 갱신" 버튼 (또는 `python auth.py`) |
-| 상태 배지가 갱신되지 않음 | 설정에서 "등하원 상태 동기화" 스위치 확인, 새로고침 버튼으로 즉시 갱신 |
-| 세션이 꼬인 것 같을 때 | `config/ansim_session.json`, `config/cookies.json` 삭제 후 재시작/재로그인 |
+| 증상                                 | 확인                                                                                    |
+| ------------------------------------ | --------------------------------------------------------------------------------------- |
+| 등하원 등록이 "학생정보 없음" 실패   | `config/ansim_config.json` 자격증명 확인. 빈 계정으로 로그인되면 엉뚱한 시설로 붙습니다 |
+| 등하원 등록이 "자격증명 미설정" 실패 | `config/ansim_config.json` 파일 생성 여부 확인                                          |
+| 차량 조회가 계속 실패                | Nicepark 세션 만료 — 설정 페이지의 "쿠키 수동 갱신" 버튼 (또는 `python auth.py`)        |
+| 상태 배지가 갱신되지 않음            | 설정에서 "등하원 상태 동기화" 스위치 확인, 새로고침 버튼으로 즉시 갱신                  |
+| 세션이 꼬인 것 같을 때               | `config/ansim_session.json`, `config/cookies.json` 삭제 후 재시작/재로그인              |
