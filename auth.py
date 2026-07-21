@@ -171,6 +171,16 @@ def _wait_for_login(page, timeout: int = 300) -> None:
     raise RuntimeError(f"로그인 시간 초과 ({timeout}초)")
 
 
+def _launch_browser(p, headless: bool):
+    """Playwright 크로미움 실행. 번들 크로미움이 없으면(신규 설치 PC)
+    Windows 기본 탑재 Edge 채널로 폴백 — playwright install 없이 동작."""
+    try:
+        return p.chromium.launch(headless=headless)
+    except Exception as e:
+        _log(f"chromium 실행 실패({e!r}) — msedge 채널로 재시도")
+        return p.chromium.launch(headless=headless, channel="msedge")
+
+
 def _do_login(headless: bool, interactive: bool, config) -> dict:
     from playwright.sync_api import sync_playwright
 
@@ -182,7 +192,7 @@ def _do_login(headless: bool, interactive: bool, config) -> dict:
 
     try:
         with sync_playwright() as p:
-            browser = p.chromium.launch(headless=headless)
+            browser = _launch_browser(p, headless)
             try:
                 context = browser.new_context()
                 page = context.new_page()

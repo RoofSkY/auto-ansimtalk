@@ -4,6 +4,17 @@
 <div class="max-w-md mx-auto bg-white dark:bg-gray-800 rounded-lg shadow p-6">
     <h2 class="text-xl font-bold mb-4">설정</h2>
 
+    <div class="space-y-5">
+    <label class="flex items-center justify-between cursor-pointer">
+        <span>Windows 시작 시 자동 실행</span>
+        <span class="relative inline-block h-7 w-14 shrink-0">
+            <input type="checkbox" onchange="toggleAutostart(this)" class="peer sr-only"
+                   {% if autostart_enabled %}checked{% endif %}>
+            <span class="absolute inset-0 rounded-full bg-gray-300 dark:bg-gray-600 peer-checked:bg-blue-600 transition-colors"></span>
+            <span class="absolute left-1 top-1 h-5 w-5 rounded-full bg-white shadow transition-transform peer-checked:translate-x-7"></span>
+        </span>
+    </label>
+
     <form action="/api/settings" method="post" class="space-y-5">
         <label class="flex items-center justify-between cursor-pointer">
             <span>입출차 토스트 알림</span>
@@ -17,12 +28,13 @@
 
         <div>
             <label class="block text-sm text-gray-500 dark:text-gray-400 mb-1">토스트 표시 시간 (초, 최소 1)</label>
-            <input name="vehicle_toast_duration" type="number"
-                   value="{{ config.vehicle_toast_duration }}" min="1"
-                   class="px-3 py-1.5 border rounded dark:bg-gray-700 dark:border-gray-600 w-32">
+            <div class="flex gap-2 items-center">
+                <input name="vehicle_toast_duration" type="number"
+                       value="{{ config.vehicle_toast_duration }}" min="1"
+                       class="px-3 py-1.5 border rounded dark:bg-gray-700 dark:border-gray-600 w-32">
+                <button class="px-4 py-1.5 bg-blue-500 hover:bg-blue-600 text-white rounded text-sm">저장</button>
+            </div>
         </div>
-
-        <div class="pt-2 border-t dark:border-gray-700"></div>
 
         <label class="flex items-center justify-between cursor-pointer">
             <span>원생 차량 자동검색</span>
@@ -34,8 +46,6 @@
             </span>
         </label>
 
-        <div class="pt-2 border-t dark:border-gray-700"></div>
-
         <label class="flex items-center justify-between cursor-pointer">
             <span>등하원 상태 동기화</span>
             <span class="relative inline-block h-7 w-14 shrink-0">
@@ -46,19 +56,19 @@
             </span>
         </label>
 
-        <div class="pt-2 border-t dark:border-gray-700"></div>
-
         <div>
             <label class="block text-sm text-gray-500 dark:text-gray-400 mb-1">
                 갱신 주기 (초, 최소 10) — 차량 자동검색 · 등하원 상태
             </label>
-            <input name="refresh_interval" type="number"
-                   value="{{ config.refresh_interval }}" min="10"
-                   class="px-3 py-1.5 border rounded dark:bg-gray-700 dark:border-gray-600 w-32">
+            <div class="flex gap-2 items-center">
+                <input name="refresh_interval" type="number"
+                       value="{{ config.refresh_interval }}" min="10"
+                       class="px-3 py-1.5 border rounded dark:bg-gray-700 dark:border-gray-600 w-32">
+                <button class="px-4 py-1.5 bg-blue-500 hover:bg-blue-600 text-white rounded text-sm">저장</button>
+            </div>
         </div>
-
-        <button class="px-4 py-2 bg-blue-500 hover:bg-blue-600 text-white rounded">저장</button>
     </form>
+    </div>
 
     <div class="mt-8 pt-4 border-t dark:border-gray-700">
         <h3 class="font-semibold mb-3 text-sm">관리 페이지</h3>
@@ -108,6 +118,18 @@
     </div>
 
     <div class="mt-6 pt-4 border-t dark:border-gray-700">
+        <h3 class="font-semibold mb-3 text-sm">업데이트</h3>
+        <div class="flex items-center gap-3">
+            <span class="text-sm text-gray-500 dark:text-gray-400">현재 버전 v{{ version }}</span>
+            <button id="btn-update" onclick="checkUpdate()"
+                    class="px-4 py-1.5 bg-blue-500 hover:bg-blue-600 text-white rounded text-sm">
+                업데이트 확인
+            </button>
+        </div>
+        <p id="update-status" class="text-xs text-gray-500 dark:text-gray-400 mt-2"></p>
+    </div>
+
+    <div class="mt-6 pt-4 border-t dark:border-gray-700">
         <h3 class="font-semibold mb-2 text-sm">서버</h3>
         <button onclick="shutdownServer()"
                 class="px-4 py-2 bg-red-500 hover:bg-red-600 text-white rounded text-sm">
@@ -120,6 +142,69 @@
 </div>
 
 <script>
+async function toggleAutostart(el) {
+    try {
+        const body = new URLSearchParams({ enabled: el.checked ? '1' : '' });
+        const r = await fetch('/api/settings/autostart', { method: 'POST', body });
+        if (!r.ok) throw new Error(await r.text());
+    } catch (e) {
+        alert('자동 실행 설정 실패: ' + e);
+        el.checked = !el.checked;
+    }
+}
+
+async function checkUpdate() {
+    const btn = document.getElementById('btn-update');
+    const status = document.getElementById('update-status');
+    btn.disabled = true;
+    status.textContent = '업데이트 확인 중...';
+    try {
+        const r = await fetch('/api/update/check', { method: 'POST' });
+        const info = await r.json();
+        if (info.error) {
+            status.textContent = info.error;
+            return;
+        }
+        if (!info.available) {
+            status.textContent = `최신 버전입니다 (v${info.current})`;
+            return;
+        }
+        if (!confirm(`새 버전 ${info.latest} 이 있습니다 (현재 v${info.current}).\n지금 업데이트할까요? 완료되면 서버가 자동으로 재시작됩니다.`)) {
+            status.textContent = `새 버전 ${info.latest} 사용 가능 — 업데이트 대기 중`;
+            return;
+        }
+        const r2 = await fetch('/api/update/apply', { method: 'POST' });
+        const res = await r2.json();
+        if (res.error) {
+            status.textContent = res.error;
+            return;
+        }
+        status.textContent = `${info.latest} 다운로드·설치 중 — 잠시 후 서버가 재시작됩니다...`;
+        waitForRestart(status);
+        return;
+    } catch (e) {
+        status.textContent = '업데이트 확인 실패: ' + e;
+    } finally {
+        btn.disabled = false;
+    }
+}
+
+function waitForRestart(status) {
+    // 서버가 내려갔다가(sawDown) 다시 /health 가 살아나면 새 버전 페이지로 리로드
+    let tries = 0, sawDown = false;
+    const timer = setInterval(async () => {
+        tries++;
+        if (tries > 90) { clearInterval(timer); status.textContent = '재시작 확인 실패 — 페이지를 직접 새로고침해 주세요.'; return; }
+        try {
+            const r = await fetch('/health', { cache: 'no-store' });
+            if (r.ok && sawDown) { clearInterval(timer); location.reload(); }
+        } catch (e) {
+            sawDown = true;
+            status.textContent = '서버 재시작 중...';
+        }
+    }, 2000);
+}
+
 async function niceparkRelogin() {
     const status = document.getElementById('np-status');
     try {

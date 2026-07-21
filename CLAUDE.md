@@ -16,12 +16,18 @@
 - 최상단 우측에는 라이트모드, 다크모드 전환 스위치 추가
 - 다크모드 스위치 좌측에 설정버튼 추가
 - 스타일은 빌드된 정적 CSS(`static/tailwind.css`)로 서빙 (CDN 미사용, Alpine 도 `static/alpine.min.js` 로컬 서빙) — **`templates/` 에서 Tailwind 클래스를 추가·변경하면 `build_css.bat` 를 실행해 재생성할 것** (CLI: `_dev/tailwindcss.exe`)
+- 정적 자원 링크에는 캐시 버스팅용 `?v={앱 버전}` 쿼리를 붙임 (`base.html`, Jinja 전역 `app_version`) — 업데이트 후 브라우저가 구버전 CSS 캐시를 계속 쓰지 않도록
 
 ### 설정탭
+
+상단 항목(자동 실행 ~ 갱신 주기) 사이에는 구분선을 두지 않고 동일 간격으로 배치.
+하단의 큰 저장 버튼 없이, **토스트 표시 시간과 갱신 주기 입력칸 오른쪽에 각각 저장 버튼**을 둠
+(어느 쪽을 눌러도 스위치 상태 포함 폼 전체가 저장됨).
 
 1. 입출차 토스트 알림
 
 - 해당 기능을 on off할 수 있도록 스위치를 만들 것
+- 토스트 표시 시간(초, 최소 1) 입력칸 포함
 
 2. 원생 차량 자동검색
 
@@ -36,15 +42,27 @@
 - 차량 자동검색과 등하원 상태 동기화는 **하나의 공통 갱신 주기**(`refresh_interval`, 기본 1분, 최소 10초)를 사용
 - 두 기능은 하나의 갱신 루프에서 한 주기마다 함께 실행됨
 
-5. 관리 페이지
+5. Windows 시작 시 자동 실행
+
+- **설정 맨 위** 에 on/off 스위치 — 켜고 끌 때마다 즉시 자동 저장 (별도 저장 버튼 없음, `/api/settings/autostart`)
+- HKCU Run 레지스트리로 관리 (`autostart.py`), 앱 설정 파일에는 저장하지 않음
+- 자동 실행 시에는 `--no-browser` 로 조용히 시작 (브라우저 자동 열기 없음)
+- 작업관리자 '시작 앱' 이 참조하는 `StartupApproved` 키와 구버전 등록 이름(`AutoAnsimTalk`)도 켜고 끌 때 함께 정리 — 작업관리자에서 '사용 안 함' 처리된 상태면 스위치도 꺼짐으로 표시되고, 다시 켜면 초기화됨
+
+6. 관리 페이지
 
 - 원생을 추가하고, 출결번호 차량번호를 수정할 수 있도록 하는 원생관리 버튼이 있어야 함
 - 차량 예약 등록을 관리하는 버튼이 있어야 함
 
-6. 계정 / 세션 (관리 페이지와 서버 종료 사이)
+7. 계정 / 세션 (관리 페이지와 업데이트 사이)
 
 - 안심톡 아이디/비밀번호 입력·저장 (비밀번호 비우면 기존 값 유지, 저장 시 세션 초기화 후 즉시 동기화)
 - 나이스파크 쿠키 수동 갱신 버튼 (클릭 시 서버 PC 에 로그인 브라우저가 열리고, 완료 결과는 로그에 표시)
+
+8. 업데이트 (서버 종료 바로 위)
+
+- 현재 버전(`version.py`) 표시 + **업데이트 확인** 버튼
+- 클릭 시 GitHub Release 최신 버전과 비교 → 새 버전이면 확인 후 다운로드·적용·서버 자동 재시작 (브라우저는 /health 복구를 감지해 자동 리로드)
 
 ### 원생 관리
 
@@ -124,3 +142,31 @@
 - 실패 시 우측 그리드에 실패 로그 출력
 - 출결 등록 실패 시 `S2.wav` 재생으로 청각적 알림
 - 사운드 모듈(`winsound`) 미지원 환경(비-Windows)에서는 no-op 처리되어 서버 동작은 유지
+
+## 설치 / 배포 / 자동 업데이트
+
+### 설치 프로그램 (AnsimTalk-Setup.exe)
+
+- `installer/setup.py` 를 PyInstaller onefile 로 빌드한 단독 exe — 파이썬 없는 PC 지원
+- 실행 시: 파이썬(3.10+) 확인 → 없으면 python.org 3.12 자동 설치(quiet) → GitHub Release 최신 zip 다운로드 → 기본 설치 경로 `문서(Documents)\auto-ansimtalk` 에 설치 (설치 화면에서 변경 가능, OneDrive 문서 폴더 이동 감지) → pip 로 requirements 설치 → 시작 메뉴/바탕화면 바로가기 → (선택) 자동 실행 등록
+- 재설치 시 `config/`, `logs/` 는 보존
+- **제거**: 설치 시 `uninstall.ps1` 생성 + HKCU Uninstall 레지스트리 등록 → Windows 설정 > 앱 > 설치된 앱에서 제거 가능. 제거 시 서버 종료·자동실행 해제·바로가기 삭제 후 폴더 삭제, 데이터(config/logs) 삭제 여부는 대화상자로 선택 (자동 업데이트 시 표시 버전도 갱신)
+- 제거 시 작업관리자 '시작 앱' 잔재까지 정리: `Run` + `StartupApproved` + 구버전 등록 이름(`AutoAnsimTalk`) 모두 삭제
+- 테스트용 CLI: `--silent --dir --zip --no-shortcut --no-register --skip-pip --no-launch --token` (제거 스크립트는 `-Silent -KeepData` 지원)
+
+### 자동 업데이트 (updater.py)
+
+- 시작 시(서버 기동 3초 후) GitHub Release 최신 태그와 `version.py` 비교 → 새 버전이면 자동 다운로드·적용 후 재시작
+- 릴리스 zip 자산(`auto-ansimtalk-*.zip`) 우선, 없으면 zipball 사용 (최상위 폴더 자동 인식)
+- `releases/latest` 가 404 면 릴리스 목록에서 최신 게시본 사용 — **pre-release 로 올린 릴리스도 설치·업데이트 인식** (설치 프로그램 동일)
+- 적용 시 `config/`, `logs/` 보존, zip 경로 탈출(zip slip) 차단
+- **가드**: `.git` 이 있는 폴더(개발 환경)에서는 자동/수동 업데이트 모두 차단; 같은 버전 자동 업데이트 재시도 루프 방지 마커(`config/update_state.json`)
+- private 저장소는 `config/app_config.json` 의 `github_token` 또는 `GITHUB_TOKEN` 환경변수 필요 (RELEASE.md 참고)
+
+### 릴리스 절차
+
+- `version.py` 버전 올리기 → `build_release.bat` → GitHub Release 에 태그 `v{버전}` 으로 zip + Setup.exe 첨부 (상세: RELEASE.md)
+
+### 기타
+
+- Nicepark 로그인 브라우저: Playwright 크로미움 → 실패 시 Windows 기본 Edge 채널 폴백 (`auth.py`) — 신규 PC 에서 `playwright install chromium` 불필요
