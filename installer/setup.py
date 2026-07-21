@@ -350,7 +350,14 @@ else {
     $deleteData = ($r -eq 'Yes')
 }
 
-Remove-ItemProperty -Path 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run' -Name $AppName -ErrorAction SilentlyContinue
+# 자동 실행 해제 — 작업관리자 '시작 앱' 이 참조하는 StartupApproved 와
+# 구버전 등록 이름(AutoAnsimTalk)까지 함께 정리
+$runKey = 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run'
+$approvedKey = 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\StartupApproved\\Run'
+foreach ($n in @($AppName, 'AutoAnsimTalk')) {
+    Remove-ItemProperty -Path $runKey -Name $n -ErrorAction SilentlyContinue
+    Remove-ItemProperty -Path $approvedKey -Name $n -ErrorAction SilentlyContinue
+}
 Remove-Item -Path ('HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\' + $AppName) -Recurse -ErrorAction SilentlyContinue
 
 foreach ($d in @([Environment]::GetFolderPath('Programs'), [Environment]::GetFolderPath('Desktop'))) {
