@@ -13,6 +13,16 @@
                 <span x-text="refreshRemaining > 0 ? refreshRemaining + '초' : '…'"></span>
             </button>
         </div>
+        <div class="flex gap-1 mb-2 flex-wrap">
+            <template x-for="st in statusTabs" :key="st">
+                <button @click="statusFilter = st"
+                        class="px-2.5 py-1 rounded border text-xs font-semibold whitespace-nowrap tabular-nums"
+                        :class="statusFilter === st
+                            ? 'bg-blue-500 border-blue-500 text-white'
+                            : 'bg-white dark:bg-gray-800 border-gray-300 dark:border-gray-600 text-gray-600 dark:text-gray-300 hover:border-blue-400'"
+                        x-text="`${st}(${statusCount(st)})`"></button>
+            </template>
+        </div>
         <div class="grid grid-cols-12 gap-2 text-xs font-bold text-gray-500 dark:text-gray-400 px-2 mb-1 border-b dark:border-gray-700 pb-1">
             <span class="col-span-2">이름</span>
             <span class="col-span-2">출결상태</span>
@@ -49,6 +59,8 @@
             <div x-show="filteredStudents.length === 0" class="text-center text-gray-500 py-8">
                 <span x-show="students.length === 0">등록된 원생이 없습니다. <a href="/students" class="text-blue-500 hover:underline">추가하기</a></span>
                 <span x-show="students.length > 0 && searchQuery" x-text="`'${searchQuery}' 검색 결과 없음`"></span>
+                <span x-show="students.length > 0 && !searchQuery && statusFilter !== '전체'"
+                      x-text="`${statusFilter} 상태인 원생이 없습니다`"></span>
             </div>
         </div>
     </section>
@@ -120,6 +132,8 @@ function mainApp() {
         refreshRemaining: {{ att_refresh_remaining }},
         searchQuery: '',
         currentTab: 'all',
+        statusFilter: '전체',
+        statusTabs: ['전체', '미등원', '등원', '하원', '결석', '공결', '캠프'],
         autoScroll: true,
         logTabs: [
             { key: 'all', label: '전체', match: () => true },
@@ -209,13 +223,18 @@ function mainApp() {
             return t ? (t.out || '').trim() : '';
         },
 
+        statusCount(st) {
+            if (st === '전체') return this.students.length;
+            return this.students.filter(s => this.statusOf(s) === st).length;
+        },
+
         get filteredStudents() {
             const q = this.searchQuery.trim();
             const out = [];
             this.students.forEach((s, idx) => {
-                if (nameMatches(s.name || '', q)) {
-                    out.push({ ...s, originalIndex: idx });
-                }
+                if (!nameMatches(s.name || '', q)) return;
+                if (this.statusFilter !== '전체' && this.statusOf(s) !== this.statusFilter) return;
+                out.push({ ...s, originalIndex: idx });
             });
             return out;
         },
