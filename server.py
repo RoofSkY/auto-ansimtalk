@@ -27,6 +27,9 @@ import auth
 import npdc
 import ansim
 import ansim_web
+import autostart
+import updater
+from version import __version__
 
 try:
     import winsound
@@ -673,11 +676,23 @@ def _parse_schedule_form(form) -> dict:
 
 
 # ---------- FastAPI ----------
+def _auto_update_check():
+    """서버 시작 시 1회 — 새 릴리스가 있으면 자동 업데이트 후 재시작."""
+    time.sleep(3)  # 서버가 뜬 뒤에 실행 (업데이트 로그가 UI에 보이도록)
+    try:
+        updater.auto_update_on_start(
+            log=lambda msg: emit_log("시스템", "업데이트", msg, True)
+        )
+    except Exception as e:
+        emit_log("시스템", "업데이트", f"자동 업데이트 실패: {e}", False)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     state.main_loop = asyncio.get_running_loop()
     threading.Thread(target=refresh_loop, daemon=True).start()
     threading.Thread(target=scheduler_loop, daemon=True).start()
+    threading.Thread(target=_auto_update_check, daemon=True).start()
     yield
 
 
@@ -733,6 +748,8 @@ async def settings_page(request: Request):
     return templates.TemplateResponse(request, "settings.html", {
         "config": state.config,
         "ansim_user_id": (_load_ansim_account().get("user_id") or "").strip(),
+        "version": __version__,
+        "autostart_enabled": autostart.is_enabled(),
     })
 
 
@@ -885,6 +902,11 @@ async def update_settings(request: Request):
         except ValueError:
             pass
     save_config(state.config)
+    # 자동 실행은 앱 설정이 아니라 Windows 레지스트리(HKCU Run)로 관리
+    try:
+        autostart.set_enabled(form.get("auto_start") == "on")
+    except Exception as e:
+        print(f"자동 실행 설정 실패: {e}", file=sys.stderr)
     return RedirectResponse("/settings", status_code=303)
 
 
@@ -905,6 +927,36 @@ async def update_ansim_account(user_id: str = Form(""), password: str = Form("")
     ansim_web.reset_session()
     _trigger_refresh("att")
     return RedirectResponse("/settings", status_code=303)
+
+
+@app.post("/api/update/check")
+async def update_check():
+    """수동 업데이트 확인 — 현재/최신 버전과 업데이트 가능 여부."""
+    info = await asyncio.to_thread(updater.check_update)
+    return {k: v for k, v in info.items() if k != "_release"}
+
+
+@app.post("/api/update/apply")
+async def update_apply():
+    """수동 업데이트 실행 — 다운로드 후 서버가 재시작됨."""
+    info = await asyncio.to_thread(updater.check_update)
+    if info.get("error"):
+        return JSONResponse({"error": info["error"]}, status_code=502)
+    if not info["available"]:
+        return JSONResponse({"error": f"이미 최신 버전입니다 (v{info['current']})"},
+                            status_code=400)
+
+    def _run():
+        try:
+            updater.download_and_apply(
+                info["_release"],
+                log=lambda msg: emit_log("시스템", "업데이트", msg, True),
+            )
+        except Exception as e:
+            emit_log("시스템", "업데이트", f"업데이트 실패: {e}", False)
+
+    threading.Thread(target=_run, daemon=True).start()
+    return {"ok": True, "latest": info["latest"]}
 
 
 @app.post("/api/nicepark/relogin")
@@ -1026,9 +1078,11 @@ def _run_server():
 
 def main():
     _redirect_stdio_if_pythonw()
+    open_browser = "--no-browser" not in sys.argv  # 부팅 자동 실행/업데이트 재시작용
 
     if _server_already_running():
-        _open_browser()
+        if open_browser:
+            _open_browser()
         return
 
     threading.Thread(target=_run_server, daemon=True).start()
@@ -1039,7 +1093,8 @@ def main():
             break
         time.sleep(0.2)
 
-    _open_browser()
+    if open_browser:
+        _open_browser()
 
     print(f"=== auto-ansimtalk 웹 서버 ===")
     print(f"브라우저 접속: http://localhost:{PORT}")

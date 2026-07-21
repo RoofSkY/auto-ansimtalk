@@ -37,11 +37,27 @@
 
 ### 기타
 - 헤더 중앙에 초단위 24시간 시계, 라이트/다크 모드 토글
-- 설정 페이지: 기능별 on/off 스위치, 갱신 주기, 원생 관리 / 차량 예약 등록 관리,
-  안심톡 계정 변경, Nicepark 쿠키 수동 갱신
+- 설정 페이지: 기능별 on/off 스위치, 갱신 주기, Windows 시작 시 자동 실행,
+  원생 관리 / 차량 예약 등록 관리, 안심톡 계정 변경, Nicepark 쿠키 수동 갱신,
+  업데이트 확인
+- **자동 업데이트** — 앱 시작 시 GitHub Release 최신 버전과 비교해 새 버전이면
+  자동 다운로드·적용 후 재시작 (설정의 "업데이트 확인" 버튼으로 수동 실행도 가능,
+  `config/`·`logs/` 는 보존)
 - 시스템 트레이 아이콘으로 백그라운드 실행 (우클릭 → 종료)
 
 ## 설치
+
+### 방법 A — 설치 프로그램 (권장, 파이썬 몰라도 됨)
+
+[Releases](https://github.com/RoofSkY/auto-ansimtalk/releases) 에서 **AnsimTalk-Setup.exe** 를 받아 실행하면 끝:
+
+1. 파이썬이 없으면 Python 3.12 자동 설치
+2. 최신 버전 앱 다운로드 및 필요 패키지 자동 설치
+3. 시작 메뉴/바탕화면 바로가기 생성, (선택) Windows 시작 시 자동 실행 등록
+
+이후 새 버전이 릴리스되면 앱이 시작할 때 스스로 업데이트한다.
+
+### 방법 B — 수동 설치 (개발용)
 
 요구 사항: **Windows**, **Python 3.12+**
 
@@ -49,6 +65,9 @@
 pip install -r requirements.txt
 playwright install chromium
 ```
+
+> Nicepark 로그인 브라우저는 Playwright 크로미움이 없으면 Windows 기본 Edge 로
+> 자동 폴백하므로 `playwright install chromium` 은 생략해도 된다.
 
 ## 초기 설정
 
@@ -88,10 +107,16 @@ auto-ansimtalk/
 ├─ ansim_web.py        # 안심톡 웹 포털 — 등하원 상태/시간 조회
 ├─ npdc.py             # Nicepark — 입차 조회·주차 할인권 등록
 ├─ auth.py             # Nicepark 로그인 세션(쿠키) 관리
+├─ version.py          # 앱 버전 (릴리스 시 여기만 수정)
+├─ updater.py          # GitHub Release 자동 업데이트
+├─ autostart.py        # Windows 시작 시 자동 실행 (HKCU Run) 관리
 ├─ start.bat           # 실행 스크립트 (백그라운드)
 ├─ build_css.bat       # 화면 수정 시 static/tailwind.css 재생성 (아래 참고)
+├─ build_release.bat   # 배포물 빌드 (릴리스 zip + Setup.exe) — RELEASE.md 참고
+├─ installer/          # 설치 프로그램 소스 (setup.py → AnsimTalk-Setup.exe)
+├─ tools/              # 빌드 보조 스크립트 (릴리스 zip 생성)
 ├─ templates/          # 화면 (Jinja2 + Tailwind + Alpine.js)
-├─ static/             # 로컬 정적 자원 (tailwind.css, alpine.min.js — 오프라인 동작)
+├─ static/             # 로컬 정적 자원 (tailwind.css, alpine.min.js, app.ico)
 ├─ sound/              # S1.Wav(성공) / S2.Wav(실패)
 ├─ config/             # 설정·데이터 (gitignore — 개인정보/자격증명 포함)
 │   ├─ ansim_config.json    # 안심톡 계정 (설정 페이지에서 관리)
@@ -99,9 +124,12 @@ auto-ansimtalk/
 │   ├─ schedules.json       # 예약 (UI에서 관리)
 │   ├─ app_config.json      # 앱 설정 (UI에서 관리)
 │   ├─ cookies.json         # Nicepark 세션 (자동 생성)
-│   └─ ansim_session.json   # 안심톡 세션 (자동 생성)
+│   ├─ ansim_session.json   # 안심톡 세션 (자동 생성)
+│   └─ update_state.json    # 자동 업데이트 상태 (자동 생성)
 └─ logs/               # 날짜별 작업 로그·진단 로그 (gitignore)
 ```
+
+새 버전 배포 방법은 [RELEASE.md](RELEASE.md) 참고.
 
 ## 화면(CSS) 수정 시
 
