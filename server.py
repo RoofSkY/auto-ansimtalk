@@ -226,6 +226,7 @@ class State:
         self.prev_in_cars: set[str] = set()
         self.last_seen_carNo: dict[str, str] = {}
         self._poll_initialized = False
+        self._att_sync_initialized = False
         self._sched_last_run: dict[str, str] = {}
 
         # 수동/액션 트리거로 갱신 루프를 즉시 깨우는 이벤트.
@@ -555,6 +556,8 @@ def _att_sync_once():
         for s in state.students
         if (s.get("code") or "").strip()
     }
+    # 첫 동기화는 초기 상태 로드일 뿐이므로 변동 로그를 남기지 않음
+    log_changes = state._att_sync_initialized
     for code, info in status_map.items():
         if code not in local_codes:
             continue
@@ -567,6 +570,13 @@ def _att_sync_once():
                 or cur_t.get("in", "") != info["in_time"]
                 or cur_t.get("out", "") != info["out_time"]):
             set_att_status(code, label, info["in_time"], info["out_time"])
+            # 다른 기기(키패드 등)에서 찍힌 등원/하원 변동만 로그로 기록 —
+            # 일반 등하원처리 로그와 동일한 양식([안심톡] 출결번호 이름 - ...하였습니다.).
+            # 이 화면에서 직접 처리한 건은 액션 시점에 상태가 먼저 바뀌므로 여기 안 걸림
+            if log_changes and cur != label and label in ("등원", "하원"):
+                name = info.get("name") or ""
+                emit_log("안심톡", f"{code} {name}".strip(), f"{label}하였습니다.", True)
+    state._att_sync_initialized = True
 
 
 def scheduler_loop():
