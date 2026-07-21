@@ -12,8 +12,11 @@ if errorlevel 1 exit /b 1
 
 echo.
 echo [2/2] Building installer (AnsimTalk-Setup.exe)...
+python tools\make_version_file.py
+if errorlevel 1 exit /b 1
 python -m PyInstaller --noconfirm --onefile --noconsole ^
     --icon "%~dp0static\app.ico" --name AnsimTalk-Setup ^
+    --version-file "%~dp0build\version_info.txt" ^
     --distpath dist --workpath build --specpath build ^
     installer\setup.py
 if errorlevel 1 exit /b 1

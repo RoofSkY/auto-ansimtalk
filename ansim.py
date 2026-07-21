@@ -42,8 +42,7 @@ _FIXED_PARAMS = {
     "re_time": "20",
 }
 
-# 자격증명은 ansim_config.json 에서 읽음.
-# program / customer_id 는 로그인 직후 member_list.asp 로 자동 조회.
+# program / customer_id 는 로그인 직후 member_list.asp 로 자동 조회 — 설정에 없음
 DEFAULT_CONFIG = {
     "user_id": "",
     "password": "",
