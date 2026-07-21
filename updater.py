@@ -16,6 +16,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import urllib.error
 import urllib.request
 import zipfile
 from pathlib import Path
@@ -35,6 +36,7 @@ UPDATE_STATE_PATH = CONFIG_DIR / "update_state.json"
 PRESERVE_DIRS = {"config", "logs"}
 
 _API_LATEST = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
+_API_LIST = f"https://api.github.com/repos/{GITHUB_REPO}/releases?per_page=10"
 _TIMEOUT = 10
 
 
@@ -77,10 +79,25 @@ def is_newer(latest_tag: str, current: str = __version__) -> bool:
 
 
 # ---------- 릴리스 조회 ----------
+def _fetch_latest_release_data() -> dict:
+    """releases/latest 는 pre-release 를 제외하므로, 404 면 목록에서 최신 것을 사용."""
+    try:
+        with urllib.request.urlopen(_request(_API_LATEST), timeout=_TIMEOUT) as r:
+            return json.loads(r.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        if e.code != 404:
+            raise
+        with urllib.request.urlopen(_request(_API_LIST), timeout=_TIMEOUT) as r:
+            releases = json.loads(r.read().decode("utf-8"))
+        published = [d for d in releases if not d.get("draft")]
+        if not published:
+            raise
+        return published[0]
+
+
 def get_latest_release() -> dict:
     """최신 릴리스 정보. {'tag','name','notes','zip_url','zip_api_url','zip_name'}"""
-    with urllib.request.urlopen(_request(_API_LATEST), timeout=_TIMEOUT) as r:
-        data = json.loads(r.read().decode("utf-8"))
+    data = _fetch_latest_release_data()
 
     tag = data.get("tag_name") or ""
     asset = None

@@ -156,11 +156,24 @@ def install_python(log, progress=None) -> tuple[str, tuple[int, int]]:
 
 # ---------- 2. 릴리스 다운로드 ----------
 def get_latest_release(token: str) -> dict:
-    url = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
+    base = f"https://api.github.com/repos/{GITHUB_REPO}/releases"
+    accept = "application/vnd.github+json"
     try:
-        with urllib.request.urlopen(
-                _github_request(url, token, "application/vnd.github+json"), timeout=15) as r:
-            data = json.loads(r.read().decode("utf-8"))
+        try:
+            with urllib.request.urlopen(
+                    _github_request(base + "/latest", token, accept), timeout=15) as r:
+                data = json.loads(r.read().decode("utf-8"))
+        except urllib.error.HTTPError as e:
+            # releases/latest 는 pre-release 를 제외 — 404 면 목록에서 최신 것을 사용
+            if e.code != 404:
+                raise
+            with urllib.request.urlopen(
+                    _github_request(base + "?per_page=10", token, accept), timeout=15) as r:
+                releases = json.loads(r.read().decode("utf-8"))
+            published = [d for d in releases if not d.get("draft")]
+            if not published:
+                raise
+            data = published[0]
     except urllib.error.HTTPError as e:
         if e.code == 404:
             raise RuntimeError(
