@@ -1,6 +1,6 @@
 """릴리스 zip 생성 — dist/auto-ansimtalk-v{버전}.zip
 
-런타임에 필요한 파일만 담는다 (config/, logs/, _dev/ 등 제외).
+런타임에 필요한 파일만 담는다 (config/, logs/, dev/ 등 제외).
 GitHub Release 에 이 zip 을 첨부하면 설치 프로그램/자동 업데이트가 사용한다.
 """
 
@@ -8,7 +8,7 @@ import sys
 import zipfile
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]  # dev/tools/ → 프로젝트 루트
 sys.path.insert(0, str(ROOT))
 from version import __version__, APP_NAME  # noqa: E402
 

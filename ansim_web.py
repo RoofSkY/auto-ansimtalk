@@ -6,8 +6,6 @@ agent API(ansim.py)와 달리 웹 포털 로그인 세션이 필요하다.
 - 원생 구분: 출결번호 (STDINFO-DATA-KEYPAD_NUM, 4자리)
 - 등하원 상태: STDINFO-DATA-ATTENDANCE_STATE
     ""=미등원, "1"=등원, "2"=하원, "3"=결석, "4"=공결, "5"=캠프
-
-패킷 참고: _dev/ansim-packets/안심톡등하원확인.txt
 """
 
 import json

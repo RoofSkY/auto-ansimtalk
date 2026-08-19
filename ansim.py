@@ -32,7 +32,7 @@ _HEADERS = {
     "Cache-Control": "no-cache",
 }
 
-# 캡처한 패킷의 고정 값 그대로 — 의미는 _dev/ansim-packets/ 참고
+# 실제 안심톡 프로그램의 패킷을 캡처해 얻은 고정 값 — 의미 불명이지만 그대로 보내야 동작
 _FIXED_PARAMS = {
     "msg_gubun": "1",
     "destphone": "",

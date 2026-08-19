@@ -21,7 +21,7 @@ __version__ = "1.0.1"
 ## 2. 빌드
 
 ```bat
-build_release.bat
+dev\build_release.bat
 ```
 
 `dist\` 에 `auto-ansimtalk-v1.0.1.zip` 과 `AnsimTalk-Setup.exe` 가 생성된다.

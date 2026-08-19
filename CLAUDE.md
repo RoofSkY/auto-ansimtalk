@@ -16,7 +16,7 @@
 - 최상단 좌측에는 등하원차량등록 프로그램 제목을 추가, 최상단 중앙에 현재 시간을 초단위로 표시(24시간)
 - 최상단 우측에는 라이트모드, 다크모드 전환 스위치 추가
 - 다크모드 스위치 좌측에 설정버튼 추가
-- 스타일은 빌드된 정적 CSS(`static/tailwind.css`)로 서빙 (CDN 미사용, Alpine 도 `static/alpine.min.js` 로컬 서빙) — **`templates/` 에서 Tailwind 클래스를 추가·변경하면 `build_css.bat` 를 실행해 재생성할 것** (CLI: `_dev/tailwindcss.exe`)
+- 스타일은 빌드된 정적 CSS(`static/tailwind.css`)로 서빙 (CDN 미사용, Alpine 도 `static/alpine.min.js` 로컬 서빙) — **`templates/` 에서 Tailwind 클래스를 추가·변경하면 `dev\build_css.bat` 를 실행해 재생성할 것** (CLI: `dev/bin/tailwindcss.exe` — gitignore, 각자 배치)
 - 정적 자원 링크에는 캐시 버스팅용 `?v={앱 버전}` 쿼리를 붙임 (`base.html`, Jinja 전역 `app_version`) — 업데이트 후 브라우저가 구버전 CSS 캐시를 계속 쓰지 않도록
 
 ### 설정탭
@@ -151,8 +151,8 @@
 
 ### 설치 프로그램 (AnsimTalk-Setup.exe)
 
-- `installer/setup.py` 를 PyInstaller onefile 로 빌드한 단독 exe — 파이썬 없는 PC 지원
-- exe 에 버전 정보 리소스 포함 (`tools/make_version_file.py` 가 version.py 에서 자동 생성, `--version-file`) — 속성이 빈 서명 없는 exe 는 Defender ML 오탐(Sabsik 등)에 잘 걸리므로 완화 목적
+- `dev/installer/setup.py` 를 PyInstaller onefile 로 빌드한 단독 exe — 파이썬 없는 PC 지원
+- exe 에 버전 정보 리소스 포함 (`dev/tools/make_version_file.py` 가 version.py 에서 자동 생성, `--version-file`) — 속성이 빈 서명 없는 exe 는 Defender ML 오탐(Sabsik 등)에 잘 걸리므로 완화 목적
 - **SSL 검증 폴백**: Windows 루트 인증서 저장소가 오래된 PC 에서 기본 검증이 `CERTIFICATE_VERIFY_FAILED` 로 실패하면 certifi CA 번들로 재시도 (updater 도 동일 — requests 의존성으로 항상 설치됨). 그래도 실패하면 한국어 안내 + `--insecure` 최후 수단 (설치 프로그램만)
 - 실행 시: 파이썬(3.10+) 확인 → 없으면 python.org 3.12 자동 설치(quiet) → GitHub Release 최신 zip 다운로드 → 기본 설치 경로 `문서(Documents)\auto-ansimtalk` 에 설치 (설치 화면에서 변경 가능, OneDrive 문서 폴더 이동 감지) → pip 로 requirements 설치 → 시작 메뉴/바탕화면 바로가기 → (선택) 자동 실행 등록
 - 재설치 시 `config/`, `logs/` 는 보존
@@ -167,11 +167,12 @@
 - `releases/latest` 가 404 면 릴리스 목록에서 최신 게시본 사용 — **pre-release 로 올린 릴리스도 설치·업데이트 인식** (설치 프로그램 동일)
 - 적용 시 `config/`, `logs/` 보존, zip 경로 탈출(zip slip) 차단
 - **가드**: `.git` 이 있는 폴더(개발 환경)에서는 자동/수동 업데이트 모두 차단; 같은 버전 자동 업데이트 재시도 루프 방지 마커(`config/update_state.json`)
-- private 저장소는 `config/app_config.json` 의 `github_token` 또는 `GITHUB_TOKEN` 환경변수 필요 (RELEASE.md 참고)
+- private 저장소는 `config/app_config.json` 의 `github_token` 또는 `GITHUB_TOKEN` 환경변수 필요 (docs/RELEASE.md 참고)
 
 ### 릴리스 절차
 
-- `version.py` 버전 올리기 → `build_release.bat` → GitHub Release 에 태그 `v{버전}` 으로 zip + Setup.exe 첨부 (상세: RELEASE.md)
+- `version.py` 버전 올리기 → `dev\build_release.bat` → GitHub Release 에 태그 `v{버전}` 으로 zip + Setup.exe 첨부 (상세: docs/RELEASE.md)
+- **개발·빌드 전용 파일은 모두 `dev/` 아래에 배치** (빌드 스크립트, tailwind 설정, `installer/`, `tools/`, `RELEASE.md`, `spec.md`, gitignore 된 `dev/bin/`) — 릴리스 zip 에는 포함되지 않음. 루트에는 배포되는 런타임 파일만 둔다
 
 ### 기타
 

@@ -219,7 +219,7 @@ def get_latest_release(token: str) -> dict:
         if e.code == 404:
             raise RuntimeError(
                 "GitHub 릴리스를 찾을 수 없습니다.\n"
-                "- 아직 릴리스가 없다면 먼저 릴리스를 만들어야 합니다 (RELEASE.md 참고).\n"
+                "- 아직 릴리스가 없다면 먼저 릴리스를 만들어야 합니다 (docs/RELEASE.md 참고).\n"
                 "- 저장소가 private 이면 GITHUB_TOKEN 환경변수 또는 --token 이 필요합니다."
             ) from e
         raise

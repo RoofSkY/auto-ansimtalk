@@ -52,7 +52,12 @@ auto-ansimtalk/
 ├─ updater.py          # GitHub Release 자동 업데이트
 ├─ autostart.py        # Windows 시작 시 자동 실행
 ├─ version.py          # 앱 버전 (릴리스 시 여기만 수정)
-├─ installer/, tools/  # 설치 프로그램·빌드 스크립트
+├─ dev/                # 개발·빌드 전용 (배포본에는 미포함)
+│   ├─ build_release.bat, build_css.bat
+│   ├─ tailwind.config.js, tailwind.input.css
+│   ├─ installer/, tools/   # 설치 프로그램·빌드 스크립트
+│   ├─ bin/                 # tailwindcss.exe (gitignore — 각자 배치)
+│   └─ RELEASE.md, spec.md
 ├─ templates/, static/ # 화면 (Jinja2 + Tailwind + Alpine.js)
 ├─ sound/              # 성공/실패 알림음
 ├─ config/             # 설정·데이터 (gitignore — 자격증명·개인정보)
@@ -61,8 +66,10 @@ auto-ansimtalk/
 
 ## 개발 참고
 
-- 화면의 Tailwind 클래스를 수정하면 `build_css.bat` 로 CSS 재생성 (`_dev/tailwindcss.exe` 필요)
-- Release 만드는 방법: [RELEASE.md](RELEASE.md)
+- 개발·빌드 관련 파일은 모두 [dev/](dev/) 에 모여 있음 (배포 zip 에는 포함되지 않음)
+- 화면의 Tailwind 클래스를 수정하면 `dev\build_css.bat` 로 CSS 재생성
+  (Tailwind CLI 는 용량이 커서 git 에 없음 — [릴리스](https://github.com/tailwindlabs/tailwindcss/releases) 에서 받아 `dev\bin\tailwindcss.exe` 로 배치)
+- Release 만드는 방법: [docs/RELEASE.md](docs/RELEASE.md)
 - 등하원 상태는 메모리로만 관리 — 재시작하면 첫 동기화가 다시 채움
 - 아이파킹(주차) 연동은 순수 HTTP REST API (`iparking.py`) — 브라우저·Playwright 불필요, 세션 토큰은 만료 시 자동 재발급
 

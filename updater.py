@@ -165,7 +165,7 @@ def _friendly_error(e: Exception) -> str:
     s = str(e)
     if "404" in s:
         return ("릴리스를 찾을 수 없습니다 — 아직 GitHub Release 가 없거나 "
-                "저장소에 접근할 수 없습니다 (RELEASE.md 참고)")
+                "저장소에 접근할 수 없습니다 (docs/RELEASE.md 참고)")
     if "403" in s:
         return "GitHub API 요청 제한/권한 오류 (잠시 후 재시도)"
     if "certificate verify failed" in s.lower():
