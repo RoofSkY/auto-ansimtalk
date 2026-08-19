@@ -1,5 +1,5 @@
 requests
-playwright
+certifi
 fastapi
 uvicorn[standard]
 jinja2

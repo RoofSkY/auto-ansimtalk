@@ -58,7 +58,7 @@
 7. 계정 / 세션 (관리 페이지와 업데이트 사이)
 
 - 안심톡 아이디/비밀번호 입력·저장 (비밀번호 비우면 기존 값 유지, 저장 시 세션 초기화 후 즉시 동기화)
-- 나이스파크 쿠키 수동 갱신 버튼 (클릭 시 서버 PC 에 로그인 브라우저가 열리고, 완료 결과는 로그에 표시)
+- 아이파킹(주차) 스토어ID(주차장 아이디)/아이디/비밀번호 입력·저장 — **안심톡과 동일 방식**으로 통일 (`/api/settings/iparking`, 비밀번호 비우면 기존 값 유지, 저장 시 세션 초기화 후 즉시 재로그인해 검증·결과를 로그에 표시)
 
 8. 업데이트 (서버 종료 바로 위)
 
@@ -84,7 +84,7 @@
 
 - 입차: [입차] 홍길동 - 11가1111
 - 출차: [출차] 홍길동 - 11가1111
-- 차량등록예약: [차량등록(예약)] 1111 예약 12:00 - 2시간 무료권 - 서버 출력 메세지
+- 차량등록예약: [차량등록(예약)] 1111 예약 12:00 - 1시간 무료권 - 서버 출력 메세지
 - 등하원: [안심톡] 출결번호 홍길동 - 서버 출력 메세지
 - 등하원 변동(동기화 감지): [안심톡] 출결번호 홍길동 - 등원하였습니다. — 일반 등하원처리와 동일한 양식. 갱신 시 **등원/하원** 시각이 확인됐는데 당일 로그에 그 원생의 등원/하원 기록이 없으면 기록 (결석/공결/캠프는 배지만 반영, 로그 없음)
     - 로그 시각은 감지 시점이 아니라 **실제 등원/하원 시각**(SDATE/EDATE)
@@ -117,7 +117,7 @@
     - 등원시간: `STDINFO-DATA-SDATE`, 하원시간: `STDINFO-DATA-EDATE` (`30:00` 은 시각 없음 표기)
     - 등원, 하원 시간은 각각 별도 컬럼 (없으면 빈칸)
 - 변경된 상태만 SSE(`att_status` 이벤트)로 브라우저에 반영
-- 웹 포털 로그인 세션은 캐시하고 만료 시 자동 재로그인 (자격증명은 `config/ansim_config.json` 공용)
+- 웹 포털 로그인 세션은 캐시하고 만료 시 자동 재로그인 (자격증명은 `config/ansimtalk.json` 공용)
 - 원생목록 검색창 우측에 **새로고침 버튼** (`⟳ N초` — 다음 갱신까지 남은 초 표시)
     - 클릭 시 즉시 갱신(차량 검색 + 등하원 상태 동기화, 스위치가 꺼져 있어도 1회 실행) 후 카운트다운 리셋
     - 등하원처리 완료 후에는 **등하원 상태만** 즉시 갱신 및 카운트다운 리셋, 차량등록은 즉시 갱신 없음 (다음 주기에 반영)
@@ -136,8 +136,9 @@
 - 예약 스케줄을 저장할 json 파일 생성 (`config/schedules.json`)
 - 등하원처리, 차량등록 로그를 날짜별 jsonl 로 저장 (`logs/YYYY-MM-DD.jsonl`)
 - 등하원 상태는 메모리로만 관리 (파일 저장 없음) — 날짜가 바뀌면 초기화, 재시작 시 첫 동기화가 다시 채움
-- 안심톡 로그인 정보는 `config/ansim_config.json` (user_id/password, agent API·웹 포털 공용)
-- 세션/인증 캐시도 `config/` 에 통합: 안심톡 세션 `config/ansim_session.json`, Nicepark 쿠키 `config/cookies.json` (자동 생성, 구버전 루트 위치에 있으면 자동 이동)
+- 안심톡 로그인 정보 + 세션은 `config/ansimtalk.json` (user_id/password + `session` 쿠키, agent API·웹 포털 공용)
+- 아이파킹(주차) 로그인 정보 + 세션은 `config/iparking.json` (store_id/user_id/password + `session`:{access,refresh,plid}, 자동 재발급)
+- **config 폴더는 총 5개 json 으로 통합**: `app_config.json`(앱 설정), `ansimtalk.json`, `iparking.json`, `schedules.json`(예약), `students.json`(원생). 자격증명과 세션은 각 서비스 파일 하나에 함께 저장(구버전 분리 파일은 로드 시 자동 통합·삭제)
 - 사운드 파일은 `sound/S1.Wav`, `sound/S2.Wav` 로 배치
 
 ## 실패 처리
@@ -174,4 +175,4 @@
 
 ### 기타
 
-- Nicepark 로그인 브라우저: Playwright 크로미움 → 실패 시 Windows 기본 Edge 채널 폴백 (`auth.py`) — 신규 PC 에서 `playwright install chromium` 불필요
+- 아이파킹(주차) 연동은 순수 HTTP REST API (`iparking.py`, `store.iparking.co.kr`) — 브라우저(Playwright) 불필요. 로그인은 `POST /api/v1/auth/login-v2` (비밀번호는 `base64(sha256_hex(pw))` 로 전송), 이후 accessToken 을 헤더에 실어 차량 조회·할인권 등록. 모든 API 는 게이트웨이 접두어 `/parking-local-tenant-discount-managements` 아래에 있음. 할인권 ID 는 주차장마다 달라 로그인 후 조회로 확보

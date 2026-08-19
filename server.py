@@ -24,8 +24,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 import uvicorn
 
-import auth
-import npdc
+import iparking
 import ansim
 import ansim_web
 import autostart
@@ -418,7 +417,7 @@ def do_vehicle(student: dict, tickets: dict[str, int] | None = None,
         emit_log(tag, overall_target, "등록할 주차권 없음", False)
         return
     for ttype in tickets:
-        if ttype not in npdc.TICKETS:
+        if ttype not in iparking.TICKETS:
             emit_log(tag, overall_target, f"알 수 없는 권종: {ttype}", False)
             return
 
@@ -430,7 +429,7 @@ def do_vehicle(student: dict, tickets: dict[str, int] | None = None,
     for entry, (last4, full) in parsed:
         car_target = f"{entry} {name}".strip()
         try:
-            in_car = npdc.find_in_car(last4, full_plate=full or None)
+            in_car = iparking.find_in_car(last4, full_plate=full or None)
         except Exception as e:
             emit_log(tag, car_target, f"조회 오류: {e}", False)
             continue
@@ -444,12 +443,12 @@ def do_vehicle(student: dict, tickets: dict[str, int] | None = None,
     for entry, in_car in parked:
         car_target = f"{entry} {name}".strip()
         for ttype, count in tickets.items():
-            ticket = npdc.TICKETS[ttype]
+            ticket = iparking.TICKETS[ttype]
             try:
                 ok_count = 0
                 last_msg = ""
                 for _ in range(count):
-                    ok, msg = npdc.apply_discount(in_car, ttype)
+                    ok, msg = iparking.apply_discount(in_car, ttype)
                     last_msg = msg
                     if ok:
                         ok_count += 1
@@ -517,7 +516,7 @@ def _poll_once():
 
     def _query(last4: str):
         try:
-            return npdc.find_in_cars(last4)
+            return iparking.find_in_cars(last4)
         except Exception:
             return None
 
@@ -694,7 +693,7 @@ def _parse_schedule_form(form) -> dict:
         return {"error": "최소 1개 요일 선택"}
 
     tickets = {}
-    for ttype in npdc.TICKETS:
+    for ttype in iparking.TICKETS:
         raw = (form.get(f"tk_{ttype}") or "0").strip() or "0"
         try:
             n = int(raw)
@@ -770,7 +769,7 @@ async def students_page(request: Request):
 async def schedules_page(request: Request):
     return templates.TemplateResponse(request, "schedules.html", {
         "schedules": state.schedules,
-        "tickets": npdc.TICKETS,
+        "tickets": iparking.TICKETS,
         "ticket_order": TICKET_DISPLAY_ORDER,
         "day_labels": DAY_LABELS,
     })
@@ -786,11 +785,24 @@ def _load_ansim_account() -> dict:
         return {}
 
 
+def _load_iparking_account() -> dict:
+    if not iparking.CONFIG_PATH.exists():
+        return {}
+    try:
+        with open(iparking.CONFIG_PATH, encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
 @app.get("/settings", response_class=HTMLResponse)
 async def settings_page(request: Request):
+    ip_acc = _load_iparking_account()
     return templates.TemplateResponse(request, "settings.html", {
         "config": state.config,
         "ansim_user_id": (_load_ansim_account().get("user_id") or "").strip(),
+        "iparking_store_id": (ip_acc.get("store_id") or "").strip(),
+        "iparking_user_id": (ip_acc.get("user_id") or "").strip(),
         "version": __version__,
         "autostart_enabled": autostart.is_enabled(),
     })
@@ -1007,17 +1019,32 @@ async def update_apply():
     return {"ok": True, "latest": info["latest"]}
 
 
-@app.post("/api/nicepark/relogin")
-async def nicepark_relogin():
-    """Nicepark 쿠키 수동 갱신 — 서버 PC 에 로그인 브라우저를 띄움."""
-    def _run():
+@app.post("/api/settings/iparking")
+async def update_iparking_account(store_id: str = Form(""), user_id: str = Form(""),
+                                  password: str = Form("")):
+    """아이파킹 계정 저장. 비밀번호가 비어 있으면 기존 값 유지. 저장 후 세션 초기화·재로그인 검증."""
+    cfg = _load_iparking_account()
+    sid, uid = store_id.strip(), user_id.strip()
+    if sid:
+        cfg["store_id"] = sid
+    if uid:
+        cfg["user_id"] = uid
+    if password:
+        cfg["password"] = password
+    iparking.CONFIG_PATH.parent.mkdir(exist_ok=True)
+    with open(iparking.CONFIG_PATH, "w", encoding="utf-8") as f:
+        json.dump(cfg, f, ensure_ascii=False, indent=2)
+    # 이전 계정의 세션이 남지 않도록 초기화 후, 새 계정으로 즉시 재로그인해 검증
+    iparking.reset_session()
+
+    def _verify():
         try:
-            auth.login(interactive=True)
-            emit_log("시스템", "Nicepark", "쿠키 수동 갱신 완료", True)
+            iparking.relogin()
+            emit_log("시스템", "아이파킹", "계정 저장 — 주차 세션 재로그인 완료", True)
         except Exception as e:
-            emit_log("시스템", "Nicepark", f"쿠키 갱신 실패: {e}", False)
-    threading.Thread(target=_run, daemon=True).start()
-    return {"ok": True}
+            emit_log("시스템", "아이파킹", f"계정 저장했으나 로그인 실패: {e}", False)
+    threading.Thread(target=_verify, daemon=True).start()
+    return RedirectResponse("/settings", status_code=303)
 
 
 # ---------- SSE ----------

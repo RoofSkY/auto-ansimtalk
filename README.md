@@ -4,10 +4,10 @@
 | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | 플랫폼 | ![Python](https://img.shields.io/badge/Python-3.12%2B-3776AB?logo=python&logoColor=white) ![Windows](https://img.shields.io/badge/Windows-10%2F11-0078D6)                                                                                                                                                                                                                                                                                                                      |
 | 스택   | ![FastAPI](https://img.shields.io/badge/FastAPI-009688?logo=fastapi&logoColor=white) ![Jinja2](https://img.shields.io/badge/Jinja2-B41717?logo=jinja&logoColor=white) ![Tailwind CSS](https://img.shields.io/badge/Tailwind_CSS-v3.4-06B6D4?logo=tailwindcss&logoColor=white) ![Alpine.js](https://img.shields.io/badge/Alpine.js-3.13-77C1D2?logo=alpinedotjs&logoColor=black) ![SSE](https://img.shields.io/badge/SSE-%EC%8B%A4%EC%8B%9C%EA%B0%84_%EB%B0%98%EC%98%81-FF8C00) |
-| 연동   | ![안심톡](https://img.shields.io/badge/%EC%95%88%EC%8B%AC%ED%86%A1-%EA%B2%BD%EA%B8%B0%EB%8F%84_%EB%93%B1%ED%95%98%EC%9B%90-1E90FF) ![Nicepark](https://img.shields.io/badge/Nicepark-%EC%A3%BC%EC%B0%A8_%ED%95%A0%EC%9D%B8%EA%B6%8C-2E8B57)                                                                                                                                                                                                                                    |
+| 연동   | ![안심톡](https://img.shields.io/badge/%EC%95%88%EC%8B%AC%ED%86%A1-%EA%B2%BD%EA%B8%B0%EB%8F%84_%EB%93%B1%ED%95%98%EC%9B%90-1E90FF) ![아이파킹](https://img.shields.io/badge/%EC%95%84%EC%9D%B4%ED%8C%8C%ED%82%B9-%EC%A3%BC%EC%B0%A8_%ED%95%A0%EC%9D%B8%EA%B6%8C-2E8B57)                                                                                                                                                                                                                                    |
 | 용도   | ![시설 내부용](https://img.shields.io/badge/%EC%82%AC%EC%9A%A9%EB%B2%94%EC%9C%84-%EC%8B%9C%EC%84%A4_%EB%82%B4%EB%B6%80%EC%9A%A9-lightgrey)                                                                                                                                                                                                                                                                                                                                     |
 
-지역아동센터의 **등하원 처리(안심톡)** 와 **주차 할인권 등록(Nicepark)** 을 한 화면에서 처리하는 로컬 웹 서버입니다.
+지역아동센터의 **등하원 처리(안심톡)** 와 **주차 할인권 등록(아이파킹)** 을 한 화면에서 처리하는 로컬 웹 서버입니다.
 
 ## 주요 기능
 
@@ -37,7 +37,7 @@ pip install -r requirements.txt
 ## 초기 설정 — 설정페이지
 
 1. **안심톡 계정** — 아이디/비밀번호 입력·저장 (시설 정보는 자동 조회)
-2. **Nicepark 로그인 (최초 1회)** — "쿠키 수동 갱신" 클릭 → 열리는 브라우저에서 로그인하면 자동 저장
+2. **아이파킹 계정** — 설정에서 스토어 ID(주차장 아이디)·아이디·비밀번호 입력·저장 (저장 시 세션 초기화 후 즉시 재로그인, 브라우저 불필요)
 3. **원생 등록** — 원생 관리에서 이름·출석번호(4자리)·차량번호 입력
    (차량번호는 콤마로 여러 대, 기본은 끝 4자리 — 같은 번호가 겹치면 `00가0000` 처럼 전체 입력)
 
@@ -48,8 +48,7 @@ auto-ansimtalk/
 ├─ server.py           # FastAPI 웹 서버 (메인)
 ├─ ansim.py            # 안심톡 agent API — 등하원 등록
 ├─ ansim_web.py        # 안심톡 웹 포털 — 상태/시간 조회
-├─ npdc.py             # Nicepark 입차 조회·할인권 등록
-├─ auth.py             # Nicepark 로그인 세션 관리
+├─ iparking.py         # 아이파킹 STORE — 로그인·입차 조회·할인권 등록/취소
 ├─ updater.py          # GitHub Release 자동 업데이트
 ├─ autostart.py        # Windows 시작 시 자동 실행
 ├─ version.py          # 앱 버전 (릴리스 시 여기만 수정)
@@ -65,7 +64,7 @@ auto-ansimtalk/
 - 화면의 Tailwind 클래스를 수정하면 `build_css.bat` 로 CSS 재생성 (`_dev/tailwindcss.exe` 필요)
 - Release 만드는 방법: [RELEASE.md](RELEASE.md)
 - 등하원 상태는 메모리로만 관리 — 재시작하면 첫 동기화가 다시 채움
-- Nicepark 로그인 브라우저는 크로미움이 없으면 Edge 로 자동 폴백 (`playwright install chromium` 불필요)
+- 아이파킹(주차) 연동은 순수 HTTP REST API (`iparking.py`) — 브라우저·Playwright 불필요, 세션 토큰은 만료 시 자동 재발급
 
 ## 문제 해결
 
@@ -73,6 +72,6 @@ auto-ansimtalk/
 | ---------------------------------- | -------------------------------------------------------------------------- |
 | 등하원 등록 "학생정보 없음" 실패   | 설정 → 안심톡 계정 확인 (빈 계정으로 로그인되면 엉뚱한 시설로 붙음)        |
 | 등하원 등록 "자격증명 미설정" 실패 | 설정 → 안심톡 계정에 아이디/비밀번호 저장                                  |
-| 차량 조회가 계속 실패              | Nicepark 세션 만료 — 설정 → "쿠키 수동 갱신"                               |
+| 차량 조회가 계속 실패              | 아이파킹 세션/계정 확인 — 설정에서 아이파킹 계정 재저장 (또는 `config/iparking.json` 확인) |
 | 상태 배지가 갱신되지 않음          | 설정 → "등하원 상태 동기화" 스위치 확인, 새로고침 버튼으로 즉시 갱신       |
-| 세션이 꼬인 것 같을 때             | `config/ansim_session.json`, `config/cookies.json` 삭제 후 재시작/재로그인 |
+| 세션이 꼬인 것 같을 때             | `config/ansimtalk.json`·`config/iparking.json` 의 `session` 키만 지우거나 설정에서 계정 재저장 |

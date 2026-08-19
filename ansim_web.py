@@ -1,7 +1,7 @@
 """안심톡 웹 포털(ansimtalk.gg.go.kr) 클라이언트 — 원생별 등하원 상태 조회.
 
 agent API(ansim.py)와 달리 웹 포털 로그인 세션이 필요하다.
-로그인 정보는 agent API 와 동일하게 config/ansim_config.json 을 사용.
+로그인 정보는 agent API 와 동일하게 config/ansimtalk.json 을 사용.
 
 - 원생 구분: 출결번호 (STDINFO-DATA-KEYPAD_NUM, 4자리)
 - 등하원 상태: STDINFO-DATA-ATTENDANCE_STATE
@@ -21,7 +21,7 @@ import requests
 BASE_URL = "https://ansimtalk.gg.go.kr"
 
 HERE = Path(__file__).resolve().parent
-ANSIM_CONFIG_PATH = HERE / "config" / "ansim_config.json"
+ANSIM_CONFIG_PATH = HERE / "config" / "ansimtalk.json"
 
 STATE_LABELS = {
     "": "미등원",
@@ -59,7 +59,7 @@ def _load_credentials() -> tuple[str, str]:
     uid = (cfg.get("user_id") or "").strip()
     pw = cfg.get("password") or ""
     if not uid or not pw:
-        raise RuntimeError("config/ansim_config.json 에 user_id/password 를 설정하세요")
+        raise RuntimeError("config/ansimtalk.json 에 user_id/password 를 설정하세요")
     return uid, pw
 
 

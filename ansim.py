@@ -3,8 +3,7 @@
 agent-ansimtalk.gg.go.kr 서버와 직접 HTTP 통신해서 등하원을 등록.
 
 데이터 파일:
-    config/ansim_config.json   - 로그인 정보
-    config/ansim_session.json  - 세션 쿠키 캐시
+    config/ansimtalk.json   - 로그인 정보 + 세션 쿠키(session 키)
 
 CLI:
     python ansim.py 1234       # 등하원 등록
@@ -55,16 +54,31 @@ _BASE = (
 )
 _CONFIG_DIR = _BASE / "config"
 _CONFIG_DIR.mkdir(exist_ok=True)
-ANSIM_CONFIG_PATH = _CONFIG_DIR / "ansim_config.json"
-ANSIM_SESSION_PATH = _CONFIG_DIR / "ansim_session.json"
+ANSIM_CONFIG_PATH = _CONFIG_DIR / "ansimtalk.json"  # 자격증명 + 세션(session 키) 통합
 
-# 구버전 루트 위치의 세션 캐시를 새 위치로 이동
-_legacy_session = _BASE / "ansim_session.json"
-try:
-    if _legacy_session.exists() and not ANSIM_SESSION_PATH.exists():
-        _legacy_session.replace(ANSIM_SESSION_PATH)
-except OSError:
-    pass
+# 구버전 분리 파일(ansim_config.json + ansim_session.json, 루트 위치 세션 포함)을 통합 파일로 이관
+if not ANSIM_CONFIG_PATH.exists():
+    _legacy_cfg = _CONFIG_DIR / "ansim_config.json"
+    _legacy_sess = _CONFIG_DIR / "ansim_session.json"
+    _legacy_root_sess = _BASE / "ansim_session.json"
+    try:
+        _merged: dict = {}
+        if _legacy_cfg.exists():
+            with open(_legacy_cfg, encoding="utf-8") as f:
+                _merged.update(json.load(f))
+        _sess_src = _legacy_sess if _legacy_sess.exists() else (
+            _legacy_root_sess if _legacy_root_sess.exists() else None)
+        if _sess_src is not None:
+            with open(_sess_src, encoding="utf-8") as f:
+                _merged["session"] = json.load(f)
+        if _merged:
+            with open(ANSIM_CONFIG_PATH, "w", encoding="utf-8") as f:
+                json.dump(_merged, f, ensure_ascii=False, indent=2)
+            _legacy_cfg.unlink(missing_ok=True)
+            _legacy_sess.unlink(missing_ok=True)
+            _legacy_root_sess.unlink(missing_ok=True)
+    except Exception:
+        pass
 
 # 마지막 register() 호출의 상세 메시지 (외부에서 읽기용)
 LAST_MESSAGE: str = ""
@@ -77,7 +91,9 @@ def _load_config() -> dict:
     if ANSIM_CONFIG_PATH.exists():
         try:
             with open(ANSIM_CONFIG_PATH, encoding="utf-8") as f:
-                return {**DEFAULT_CONFIG, **json.load(f)}
+                data = json.load(f)
+            data.pop("session", None)  # 세션은 _config 와 분리 관리
+            return {**DEFAULT_CONFIG, **data}
         except Exception:
             pass
     return dict(DEFAULT_CONFIG)
@@ -85,18 +101,24 @@ def _load_config() -> dict:
 
 def _save_config() -> None:
     try:
+        data = dict(_config)
+        if ANSIM_CONFIG_PATH.exists():
+            with open(ANSIM_CONFIG_PATH, encoding="utf-8") as f:
+                session = json.load(f).get("session")
+            if session is not None:
+                data["session"] = session
         with open(ANSIM_CONFIG_PATH, "w", encoding="utf-8") as f:
-            json.dump(_config, f, ensure_ascii=False, indent=2)
+            json.dump(data, f, ensure_ascii=False, indent=2)
     except Exception:
         pass
 
 
 def _restore_cookies() -> None:
-    if not ANSIM_SESSION_PATH.exists() or _session is None:
+    if _session is None or not ANSIM_CONFIG_PATH.exists():
         return
     try:
-        with open(ANSIM_SESSION_PATH, encoding="utf-8") as f:
-            cookies = json.load(f)
+        with open(ANSIM_CONFIG_PATH, encoding="utf-8") as f:
+            cookies = json.load(f).get("session") or {}
         for name, value in cookies.items():
             _session.cookies.set(name, value)
     except Exception:
@@ -104,12 +126,17 @@ def _restore_cookies() -> None:
 
 
 def _save_cookies() -> None:
+    """통합 파일의 session 키만 갱신 — 자격증명은 보존."""
     if _session is None:
         return
     try:
-        cookies = dict(_session.cookies)
-        with open(ANSIM_SESSION_PATH, "w", encoding="utf-8") as f:
-            json.dump(cookies, f, ensure_ascii=False, indent=2)
+        data = {}
+        if ANSIM_CONFIG_PATH.exists():
+            with open(ANSIM_CONFIG_PATH, encoding="utf-8") as f:
+                data = json.load(f)
+        data["session"] = dict(_session.cookies)
+        with open(ANSIM_CONFIG_PATH, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
     except Exception:
         pass
 
@@ -150,7 +177,7 @@ def _login() -> dict:
     # 자격증명이 비어 있으면 조용히 엉뚱한 시설로 등록되지 않도록 여기서 명확히 차단.
     if not uid or not pw:
         raise RuntimeError(
-            "안심톡 자격증명 미설정 — config/ansim_config.json 에 user_id/password 를 입력하세요"
+            "안심톡 자격증명 미설정 — config/ansimtalk.json 에 user_id/password 를 입력하세요"
         )
     params = {
         "sMemId": uid,
@@ -254,13 +281,18 @@ def _try_register(code: str) -> tuple[bool, str, bool]:
 
 
 def reset_session() -> None:
-    """자격증명 변경 시 캐시된 세션/설정 초기화 — 다음 호출에서 새로 로그인."""
+    """자격증명 변경 시 캐시된 세션/설정 초기화 — 다음 호출에서 새로 로그인. 자격증명은 보존."""
     global _session, _config
     _session = None
     _config = None
     try:
-        ANSIM_SESSION_PATH.unlink()
-    except OSError:
+        if ANSIM_CONFIG_PATH.exists():
+            with open(ANSIM_CONFIG_PATH, encoding="utf-8") as f:
+                data = json.load(f)
+            data.pop("session", None)
+            with open(ANSIM_CONFIG_PATH, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+    except Exception:
         pass
 
 
@@ -292,9 +324,8 @@ def register(code: str) -> bool:
 
 def setup_guide() -> None:
     print("=== 안심톡 API 클라이언트 ===\n")
-    print(f"설정 파일: {ANSIM_CONFIG_PATH}")
-    print(f"세션 캐시: {ANSIM_SESSION_PATH}\n")
-    print("ansim_config.json 형식:\n")
+    print(f"설정 파일: {ANSIM_CONFIG_PATH}\n")
+    print("ansimtalk.json 형식:\n")
     print("  {")
     print('    "user_id": "안심톡 로그인 ID",')
     print('    "password": "비밀번호"')
