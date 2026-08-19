@@ -11,9 +11,12 @@ CLI:
 """
 
 import json
+import re
 import sys
 from datetime import datetime
 from pathlib import Path
+
+import jsonstore
 
 try:
     import requests
@@ -50,7 +53,7 @@ DEFAULT_CONFIG = {
 _BASE = (
     Path(sys.executable).resolve().parent
     if getattr(sys, "frozen", False)
-    else Path(__file__).resolve().parent
+    else Path(__file__).resolve().parent.parent  # src/ → 앱 루트
 )
 _CONFIG_DIR = _BASE / "config"
 _CONFIG_DIR.mkdir(exist_ok=True)
@@ -72,8 +75,7 @@ if not ANSIM_CONFIG_PATH.exists():
             with open(_sess_src, encoding="utf-8") as f:
                 _merged["session"] = json.load(f)
         if _merged:
-            with open(ANSIM_CONFIG_PATH, "w", encoding="utf-8") as f:
-                json.dump(_merged, f, ensure_ascii=False, indent=2)
+            jsonstore.save(ANSIM_CONFIG_PATH, _merged, private=True)
             _legacy_cfg.unlink(missing_ok=True)
             _legacy_sess.unlink(missing_ok=True)
             _legacy_root_sess.unlink(missing_ok=True)
@@ -88,37 +90,31 @@ _config: dict | None = None
 
 
 def _load_config() -> dict:
-    if ANSIM_CONFIG_PATH.exists():
-        try:
-            with open(ANSIM_CONFIG_PATH, encoding="utf-8") as f:
-                data = json.load(f)
-            data.pop("session", None)  # 세션은 _config 와 분리 관리
-            return {**DEFAULT_CONFIG, **data}
-        except Exception:
-            pass
-    return dict(DEFAULT_CONFIG)
+    data = jsonstore.load(ANSIM_CONFIG_PATH)
+    data.pop("session", None)  # 세션은 _config 와 분리 관리
+    return {**DEFAULT_CONFIG, **data}
 
 
 def _save_config() -> None:
+    """자격증명만 갱신 — 파일에 있던 session 은 보존(락 안에서 읽고 쓴다)."""
+    def _mutate(data: dict) -> dict:
+        session = data.get("session")
+        merged = dict(_config)
+        if session is not None:
+            merged["session"] = session
+        return merged
+
     try:
-        data = dict(_config)
-        if ANSIM_CONFIG_PATH.exists():
-            with open(ANSIM_CONFIG_PATH, encoding="utf-8") as f:
-                session = json.load(f).get("session")
-            if session is not None:
-                data["session"] = session
-        with open(ANSIM_CONFIG_PATH, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
+        jsonstore.update(ANSIM_CONFIG_PATH, _mutate, private=True)
     except Exception:
         pass
 
 
 def _restore_cookies() -> None:
-    if _session is None or not ANSIM_CONFIG_PATH.exists():
+    if _session is None:
         return
     try:
-        with open(ANSIM_CONFIG_PATH, encoding="utf-8") as f:
-            cookies = json.load(f).get("session") or {}
+        cookies = jsonstore.load(ANSIM_CONFIG_PATH).get("session") or {}
         for name, value in cookies.items():
             _session.cookies.set(name, value)
     except Exception:
@@ -126,17 +122,16 @@ def _restore_cookies() -> None:
 
 
 def _save_cookies() -> None:
-    """통합 파일의 session 키만 갱신 — 자격증명은 보존."""
+    """통합 파일의 session 키만 갱신 — 자격증명은 보존(락 안에서 읽고 쓴다)."""
     if _session is None:
         return
+    cookies = dict(_session.cookies)
+
+    def _mutate(data: dict) -> None:
+        data["session"] = cookies
+
     try:
-        data = {}
-        if ANSIM_CONFIG_PATH.exists():
-            with open(ANSIM_CONFIG_PATH, encoding="utf-8") as f:
-                data = json.load(f)
-        data["session"] = dict(_session.cookies)
-        with open(ANSIM_CONFIG_PATH, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
+        jsonstore.update(ANSIM_CONFIG_PATH, _mutate, private=True)
     except Exception:
         pass
 
@@ -161,6 +156,19 @@ def _ensure_init() -> None:
             pass
 
 
+_SECRET_QS = re.compile(r"(sMemPw|sMemId)=[^&\s'\"]*", re.I)
+
+
+def _scrub(msg: object) -> str:
+    """로그·화면에 남기기 전 자격증명 제거.
+
+    로그인은 비밀번호를 쿼리스트링으로 보내므로 requests 예외 메시지에
+    `...loginChk.asp?sMemId=아이디&sMemPw=평문비밀번호` 가 그대로 들어간다.
+    이 문자열이 LAST_MESSAGE → 로그 파일 → 브라우저까지 흘러가므로 반드시 가린다.
+    """
+    return _SECRET_QS.sub(r"\1=***", str(msg))
+
+
 def _connect() -> bool:
     """connect.asp — 세션 발급 (Set-Cookie ASPSESSIONID)."""
     res = _session.post(f"{BASE_URL}/connect.asp", data="", timeout=10)
@@ -183,17 +191,23 @@ def _login() -> dict:
         "sMemId": uid,
         "sMemPw": pw,
     }
-    res = _session.post(
-        f"{BASE_URL}/loginChk.asp",
-        params=params, data="", timeout=10,
-    )
-    res.raise_for_status()
+    # 서버(레거시 ASP)가 쿼리스트링만 받으므로 비밀번호가 URL 에 실린다.
+    # requests 예외 메시지에는 전체 URL 이 포함되므로 그대로 로그에 남기면
+    # 비밀번호가 평문으로 기록된다 — 반드시 _scrub() 을 거쳐 전달할 것.
+    try:
+        res = _session.post(
+            f"{BASE_URL}/loginChk.asp",
+            params=params, data="", timeout=10,
+        )
+        res.raise_for_status()
+    except requests.RequestException as e:
+        raise RuntimeError(f"로그인 요청 실패: {_scrub(e)}") from None
     try:
         data = res.json()
     except ValueError:
-        raise RuntimeError(f"로그인 응답 파싱 실패: {res.text[:200]!r}")
+        raise RuntimeError(f"로그인 응답 파싱 실패: {_scrub(res.text[:200])}")
     if data.get("RESULT") != "Y":
-        raise RuntimeError(f"로그인 거부: {data}")
+        raise RuntimeError(f"로그인 거부: { {k: v for k, v in data.items() if k != 'sMemPw'} }")
     _save_cookies()
     return data
 
@@ -285,13 +299,12 @@ def reset_session() -> None:
     global _session, _config
     _session = None
     _config = None
+    def _drop_session(data: dict) -> None:
+        data.pop("session", None)
+
     try:
         if ANSIM_CONFIG_PATH.exists():
-            with open(ANSIM_CONFIG_PATH, encoding="utf-8") as f:
-                data = json.load(f)
-            data.pop("session", None)
-            with open(ANSIM_CONFIG_PATH, "w", encoding="utf-8") as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
+            jsonstore.update(ANSIM_CONFIG_PATH, _drop_session, private=True)
     except Exception:
         pass
 
@@ -312,13 +325,13 @@ def register(code: str) -> bool:
             try:
                 _login_flow()
             except Exception as e:
-                LAST_MESSAGE = f"재로그인 실패: {e}"
+                LAST_MESSAGE = f"재로그인 실패: {_scrub(e)}"
                 return False
             ok, msg, _ = _try_register(code)
         LAST_MESSAGE = msg
         return ok
     except Exception as e:
-        LAST_MESSAGE = f"오류: {type(e).__name__}: {e}"
+        LAST_MESSAGE = f"오류: {type(e).__name__}: {_scrub(e)}"
         return False
 
 

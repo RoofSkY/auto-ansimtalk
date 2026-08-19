@@ -17,7 +17,7 @@ _LEGACY_NAMES = ("AutoAnsimTalk",)  # 구버전 등록 이름
 HERE = (
     Path(sys.executable).resolve().parent
     if getattr(sys, "frozen", False)
-    else Path(__file__).resolve().parent
+    else Path(__file__).resolve().parent.parent  # src/ → 앱 루트
 )
 
 

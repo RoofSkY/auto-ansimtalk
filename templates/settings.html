@@ -153,14 +153,42 @@
     </div>
 </div>
 
+<!-- 저장 완료 알림 — 폼 제출은 리다이렉트뿐이라 표시가 없으면 저장 여부를 알 수 없다 -->
+<div id="save-toast"
+     class="hidden fixed top-20 left-1/2 -translate-x-1/2 z-50 px-6 py-3 rounded-lg shadow-lg
+            bg-green-600 text-white text-sm font-semibold
+            opacity-0 transition-opacity duration-500"></div>
+
 <script>
+function showSaved(text, ok = true) {
+    const el = document.getElementById('save-toast');
+    el.textContent = text;
+    el.classList.remove('hidden', 'bg-green-600', 'bg-red-600');
+    el.classList.add(ok ? 'bg-green-600' : 'bg-red-600');
+    clearTimeout(el._fade);
+    clearTimeout(el._hide);
+    // 표시 직후 바로 opacity 를 바꾸면 전환이 생략되므로 다음 프레임에 올린다
+    requestAnimationFrame(() => el.classList.replace('opacity-0', 'opacity-100'));
+    el._fade = setTimeout(() => el.classList.replace('opacity-100', 'opacity-0'), 2200);
+    el._hide = setTimeout(() => el.classList.add('hidden'), 2750);  // 페이드가 끝난 뒤 숨김
+}
+
+(function () {
+    const what = new URLSearchParams(location.search).get('saved');
+    if (!what) return;
+    showSaved(`${what} 저장 완료`);
+    // 새로고침하면 알림이 다시 뜨지 않도록 주소만 정리
+    history.replaceState(null, '', location.pathname);
+})();
+
 async function toggleAutostart(el) {
     try {
         const body = new URLSearchParams({ enabled: el.checked ? '1' : '' });
         const r = await fetch('/api/settings/autostart', { method: 'POST', body });
         if (!r.ok) throw new Error(await r.text());
+        showSaved(el.checked ? '자동 실행 켜짐' : '자동 실행 꺼짐');
     } catch (e) {
-        alert('자동 실행 설정 실패: ' + e);
+        showSaved('자동 실행 설정 실패: ' + e, false);
         el.checked = !el.checked;
     }
 }

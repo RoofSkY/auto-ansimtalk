@@ -172,7 +172,14 @@
 ### 릴리스 절차
 
 - `version.py` 버전 올리기 → `dev\build_release.bat` → GitHub Release 에 태그 `v{버전}` 으로 zip + Setup.exe 첨부 (상세: docs/RELEASE.md)
-- **개발·빌드 전용 파일은 모두 `dev/` 아래에 배치** (빌드 스크립트, tailwind 설정, `installer/`, `tools/`, `RELEASE.md`, `spec.md`, gitignore 된 `dev/bin/`) — 릴리스 zip 에는 포함되지 않음. 루트에는 배포되는 런타임 파일만 둔다
+- **개발·빌드 전용 파일은 모두 `dev/` 아래에 배치** (빌드 스크립트, tailwind 설정, `installer/`, `tools/`, gitignore 된 `dev/bin/`), 문서는 `docs/` — 릴리스 zip 에는 포함되지 않음
+
+### 소스 배치 (중요)
+
+- 앱 소스는 `src/` 에 둔다 (`app.py` 가 메인 서버, 나머지는 서브 모듈). 루트에는 `server.py`(런처)와 `version.py` 만 둔다
+- **루트 `server.py` 런처는 반드시 이 이름·위치로 유지할 것** — 기존 설치본의 바로가기·자동 실행 등록, updater 의 재시작 경로, installer/updater 의 앱 루트 판정(`server.py` 존재 여부)이 모두 이 파일을 찾는다. 옮기거나 이름을 바꾸면 이미 배포된 PC 가 실행되지 않는다
+- `src/` 모듈은 앱 루트를 `Path(__file__).resolve().parent.parent` 로 잡는다 (frozen 일 때는 `sys.executable` 기준 유지)
+- 구조 변경 전(v1.2.0 이하) 루트에 있던 모듈은 업데이트·재설치 시 자동 삭제된다 (`updater._remove_legacy_root_modules`, installer 의 `copy_app`) — 루트 잔재가 `src/` 의 새 코드보다 먼저 임포트되는 것을 막기 위함
 
 ### 기타
 

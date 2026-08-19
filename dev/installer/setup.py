@@ -260,6 +260,14 @@ def safe_extract(zip_path: Path, dest: Path) -> Path:
     raise RuntimeError("zip 안에서 server.py 를 찾지 못했습니다")
 
 
+# 소스가 src/ 로 이동하기 전(v1.2.0 이하) 앱 루트에 있던 모듈들 —
+# 덮어쓰기만 하면 루트에 남아 src/ 의 새 코드 대신 임포트될 수 있어 재설치 시 정리한다.
+_LEGACY_ROOT_MODULES = (
+    "ansim.py", "ansim_web.py", "iparking.py", "updater.py", "autostart.py",
+    "npdc.py", "auth.py",
+)
+
+
 def copy_app(root: Path, install_dir: Path) -> None:
     """앱 파일을 설치 폴더로 복사 — 기존 config/, logs/ 는 보존."""
     install_dir.mkdir(parents=True, exist_ok=True)
@@ -273,6 +281,14 @@ def copy_app(root: Path, install_dir: Path) -> None:
         else:
             dst.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(src, dst)
+
+    if (install_dir / "src").is_dir():
+        for name in _LEGACY_ROOT_MODULES:
+            try:
+                (install_dir / name).unlink(missing_ok=True)
+            except OSError:
+                pass
+        shutil.rmtree(install_dir / "__pycache__", ignore_errors=True)
 
 
 # ---------- 3. 패키지 설치 ----------
@@ -329,22 +345,66 @@ def create_shortcuts(python_exe: str, install_dir: Path, desktop: bool, log) -> 
     log("바로가기 생성 완료 (시작 메뉴" + (" + 바탕화면" if desktop else "") + ")")
 
 
+_RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
+_APPROVED_KEY = r"Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run"
+
+
+def get_autostart() -> bool:
+    """현재 자동 실행 등록 상태 — 재설치 시 체크박스 기본값으로 쓴다.
+
+    기본값을 무조건 '꺼짐' 으로 두면, 자동 실행을 켜 두고 쓰던 사용자가
+    복구 설치를 했을 때 설정이 조용히 해제된다.
+    """
+    if sys.platform != "win32":
+        return False
+    import winreg
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, _RUN_KEY) as key:
+            winreg.QueryValueEx(key, APP_NAME)
+    except OSError:
+        return False
+    # StartupApproved 첫 바이트: 0x02=사용, 0x03=사용 안 함 (값이 없으면 사용)
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, _APPROVED_KEY) as key:
+            data, _ = winreg.QueryValueEx(key, APP_NAME)
+        if data and data[0] == 3:
+            return False
+    except OSError:
+        pass
+    return True
+
+
 def set_autostart(python_exe: str, install_dir: Path, on: bool, log) -> None:
     if sys.platform != "win32":
         return
     import winreg
-    key_path = r"Software\Microsoft\Windows\CurrentVersion\Run"
-    with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path, 0,
+    with winreg.OpenKey(winreg.HKEY_CURRENT_USER, _RUN_KEY, 0,
                         winreg.KEY_SET_VALUE) as key:
         if on:
             cmd = f'"{_pythonw_of(python_exe)}" "{install_dir / "server.py"}" --no-browser'
             winreg.SetValueEx(key, APP_NAME, 0, winreg.REG_SZ, cmd)
-            log("Windows 시작 시 자동 실행 등록 완료")
         else:
             try:
                 winreg.DeleteValue(key, APP_NAME)
             except OSError:
                 pass
+    if on:
+        # 작업관리자 '시작 앱' 에서 '사용 안 함' 으로 꺼 둔 상태를 초기화하지 않으면
+        # 등록은 됐는데 부팅 시 실행되지 않는다 (앱의 autostart.enable() 과 동일 처리)
+        _delete_reg_value(_APPROVED_KEY, APP_NAME)
+        log("Windows 시작 시 자동 실행 등록 완료")
+    else:
+        _delete_reg_value(_APPROVED_KEY, APP_NAME)
+
+
+def _delete_reg_value(key_path: str, name: str) -> None:
+    import winreg
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path, 0,
+                            winreg.KEY_SET_VALUE) as key:
+            winreg.DeleteValue(key, name)
+    except OSError:
+        pass
 
 
 # ---------- 제거 프로그램 ----------
@@ -475,7 +535,8 @@ class Options:
         self.desktop = True
         self.shortcuts = True
         self.register = True  # Windows "설치된 앱" 제거 등록
-        self.autostart = False
+        # 이미 켜 두었다면 재설치 시에도 유지 (기본 꺼짐이면 조용히 해제됨)
+        self.autostart = get_autostart()
         self.local_zip: Path | None = None  # 테스트용 — 릴리스 대신 로컬 zip 사용
         self.token = os.environ.get("GITHUB_TOKEN", "").strip()
         self.skip_pip = False
@@ -579,7 +640,7 @@ def run_gui() -> None:
               ).pack(side="left", padx=(6, 0))
 
     desktop_var = tk.BooleanVar(value=True)
-    autostart_var = tk.BooleanVar(value=False)
+    autostart_var = tk.BooleanVar(value=get_autostart())  # 현재 등록 상태를 반영
     opt = tk.Frame(root)
     opt.pack(fill="x", padx=20, pady=(6, 0))
     tk.Checkbutton(opt, text="바탕화면 바로가기 만들기", variable=desktop_var,

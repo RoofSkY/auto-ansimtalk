@@ -32,7 +32,6 @@ logs/
 
 # ---- 개발용 바이너리 (tailwindcss.exe 약 40MB — 커밋하지 않고 각자 내려받아 배치) ----
 dev/bin/
-_dev/
 
 # ---- 릴리스 빌드 산출물 ----
 build/

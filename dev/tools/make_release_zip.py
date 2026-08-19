@@ -13,18 +13,14 @@ sys.path.insert(0, str(ROOT))
 from version import __version__, APP_NAME  # noqa: E402
 
 FILES = [
-    "server.py",
-    "ansim.py",
-    "ansim_web.py",
-    "iparking.py",
-    "updater.py",
-    "autostart.py",
+    "server.py",  # 앱 루트 런처 — 바로가기/updater 가 이 경로를 실행한다
     "version.py",
     "requirements.txt",
     "start.bat",
     "README.md",
 ]
 GLOBS = [
+    "src/*.py",
     "templates/*.html",
     "static/tailwind.css",
     "static/alpine.min.js",

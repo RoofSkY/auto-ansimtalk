@@ -31,7 +31,7 @@
             <span class="col-span-4"></span>
         </div>
         <div class="space-y-1 overflow-y-auto flex-1">
-            <template x-for="s in filteredStudents" :key="s.originalIndex">
+            <template x-for="s in filteredStudents" :key="s.id">
                 <div class="grid grid-cols-12 gap-2 items-center p-2 rounded text-sm transition-colors"
                      :class="isParked(s) ? 'bg-green-300 dark:bg-green-700' : 'bg-gray-50 dark:bg-gray-700/50'">
                     <span x-text="s.name" class="col-span-2 font-semibold truncate"></span>
@@ -45,11 +45,11 @@
                     <span class="col-span-2 text-gray-600 dark:text-gray-400 truncate tabular-nums"
                           x-text="outTimeOf(s)"></span>
                     <div class="col-span-4 flex gap-1 justify-end">
-                        <button @click="doAction(s.originalIndex, 'attendance', $event)"
+                        <button @click="doAction(s.id, 'attendance', $event)"
                                 class="px-2 py-1 bg-blue-500 hover:bg-blue-600 active:bg-blue-700 text-white rounded text-xs">
                             등하원처리
                         </button>
-                        <button @click="doAction(s.originalIndex, 'vehicle', $event)"
+                        <button @click="doAction(s.id, 'vehicle', $event)"
                                 class="px-2 py-1 bg-blue-500 hover:bg-blue-600 active:bg-blue-700 text-white rounded text-xs">
                             차량등록
                         </button>
@@ -108,11 +108,9 @@ function chosungOf(ch) {
     return null;
 }
 
-function nameMatches(name, query) {
-    if (!query) return true;
-    if (name.length < query.length) return false;
+function matchesAt(name, query, start) {
     for (let i = 0; i < query.length; i++) {
-        const q = query[i], n = name[i];
+        const q = query[i], n = name[start + i];
         if (CHOSUNG_SET.has(q)) {
             if (chosungOf(n) !== q) return false;
         } else {
@@ -120,6 +118,16 @@ function nameMatches(name, query) {
         }
     }
     return true;
+}
+
+// 부분 일치 — '길동' 으로도 '홍길동' 이 검색된다 (초성 혼용 가능)
+function nameMatches(name, query) {
+    if (!query) return true;
+    if (name.length < query.length) return false;
+    for (let s = 0; s <= name.length - query.length; s++) {
+        if (matchesAt(name, query, s)) return true;
+    }
+    return false;
 }
 
 function mainApp() {
@@ -156,11 +164,8 @@ function mainApp() {
         },
 
         connectSSE() {
-            const es = new EventSource('/stream');
-            es.onmessage = (e) => {
-                if (e.data.startsWith(':')) return;
-                let msg;
-                try { msg = JSON.parse(e.data); } catch { return; }
+            // 연결은 base.html 의 공용 버스가 하나만 유지한다 (브라우저 연결 한도 절약)
+            window.sseBus.on((msg) => {
                 if (msg.type === 'log') {
                     // 시간순 위치에 삽입 — 과거 시각의 보정 로그가 맨 아래에 붙지 않도록
                     const t = msg.data.time || '';
@@ -170,6 +175,11 @@ function mainApp() {
                     if (this.autoScroll) {
                         this.$nextTick(() => this.scrollToBottom(false));
                     }
+                } else if (msg.type === 'students_changed') {
+                    fetch('/api/students/list')
+                        .then(r => r.json())
+                        .then(d => { this.students = d.students || []; })
+                        .catch(() => {});
                 } else if (msg.type === 'in_cars') {
                     this.inCars = new Set(msg.data.cars);
                 } else if (msg.type === 'att_status') {
@@ -183,12 +193,12 @@ function mainApp() {
                 } else if (msg.type === 'att_reset') {
                     this.attStatus = {};
                     this.attTimes = {};
+                    // 로그 정렬 키가 "HH:MM:SS" 뿐이라 자정을 넘기면 새 로그가
+                    // 전날 항목보다 앞서 맨 위에 박힌다 — 날짜가 바뀌면 비운다
+                    this.logs = [];
                 }
-            };
-            es.onerror = () => {
-                setTimeout(() => this.connectSSE(), 3000);
-                es.close();
-            };
+            });
+            window.sseBus.start();
         },
 
         isParked(student) {
@@ -223,18 +233,21 @@ function mainApp() {
             return t ? (t.out || '').trim() : '';
         },
 
+        // 카운트도 이름 검색을 함께 적용 — 목록 개수와 탭 숫자가 어긋나지 않도록
         statusCount(st) {
-            if (st === '전체') return this.students.length;
-            return this.students.filter(s => this.statusOf(s) === st).length;
+            const q = this.searchQuery.trim();
+            const pool = this.students.filter(s => nameMatches(s.name || '', q));
+            if (st === '전체') return pool.length;
+            return pool.filter(s => this.statusOf(s) === st).length;
         },
 
         get filteredStudents() {
             const q = this.searchQuery.trim();
             const out = [];
-            this.students.forEach((s, idx) => {
+            this.students.forEach((s) => {
                 if (!nameMatches(s.name || '', q)) return;
                 if (this.statusFilter !== '전체' && this.statusOf(s) !== this.statusFilter) return;
-                out.push({ ...s, originalIndex: idx });
+                out.push({ ...s });
             });
             return out;
         },
@@ -272,12 +285,12 @@ function mainApp() {
             }, 800);
         },
 
-        async doAction(idx, action, ev) {
+        async doAction(sid, action, ev) {
             const btn = ev.currentTarget;
             btn.disabled = true;
             btn.classList.add('opacity-50');
             try {
-                await fetch(`/api/students/${idx}/${action}`, { method: 'POST' });
+                await fetch(`/api/students/${sid}/${action}`, { method: 'POST' });
                 // 등하원처리만 완료 후 서버가 즉시 갱신 → refreshed 로 리셋 (차량등록은 갱신 없음)
                 if (action === 'attendance') this.refreshRemaining = 0;
             } finally {

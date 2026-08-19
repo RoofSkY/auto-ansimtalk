@@ -23,13 +23,13 @@
     <div class="space-y-2">
         {% for s in students %}
         <div class="flex gap-2 items-center bg-gray-50 dark:bg-gray-700 rounded p-2">
-            <form action="/api/students/{{ loop.index0 }}/edit" method="post" class="flex gap-2 items-center flex-1">
+            <form action="/api/students/{{ s.id }}/edit" method="post" class="flex gap-2 items-center flex-1">
                 <input name="name" value="{{ s.name }}" class="px-2 py-1 border rounded dark:bg-gray-600 dark:border-gray-500 w-32">
                 <input name="code" value="{{ s.code }}" class="px-2 py-1 border rounded dark:bg-gray-600 dark:border-gray-500 w-24">
                 <input name="cars" value="{{ s.car_no4s | join(', ') }}" class="flex-1 px-2 py-1 border rounded dark:bg-gray-600 dark:border-gray-500">
                 <button class="px-3 py-1 bg-blue-500 hover:bg-blue-600 text-white rounded text-sm whitespace-nowrap">저장</button>
             </form>
-            <form action="/api/students/{{ loop.index0 }}/delete" method="post"
+            <form action="/api/students/{{ s.id }}/delete" method="post"
                   onsubmit="return confirm('정말 삭제할까요?')">
                 <button class="px-3 py-1 bg-red-500 hover:bg-red-600 text-white rounded text-sm">삭제</button>
             </form>

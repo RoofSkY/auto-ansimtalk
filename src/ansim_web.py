@@ -18,7 +18,7 @@ import requests
 
 BASE_URL = "https://ansimtalk.gg.go.kr"
 
-HERE = Path(__file__).resolve().parent
+HERE = Path(__file__).resolve().parent.parent  # src/ → 앱 루트
 ANSIM_CONFIG_PATH = HERE / "config" / "ansimtalk.json"
 
 STATE_LABELS = {

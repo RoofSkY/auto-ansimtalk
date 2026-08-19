@@ -1,9 +1,9 @@
 """아이파킹 STORE 포털(store.iparking.co.kr) 주차 할인권 자동 등록.
 
-기존 npdc.py(나이스파크) 를 대체 — server.py 가 쓰는 인터페이스와 호환:
+app.py 가 쓰는 인터페이스:
   TICKETS, find_in_cars(car4), find_in_car(car4, full_plate), apply_discount(in_car, ttype)
 
-나이스파크와 달리 브라우저(Playwright) 없이 순수 HTTP 로 로그인한다.
+브라우저(Playwright) 없이 순수 HTTP 로 로그인한다.
 자격증명+세션: config/iparking.json  { store_id, user_id, password, session:{access,refresh,plid} }
 
 권종:
@@ -27,6 +27,9 @@ import time
 from pathlib import Path
 
 import requests
+from requests.adapters import HTTPAdapter
+
+import jsonstore
 
 ROOT_URL = "https://store.iparking.co.kr"
 BASE_URL = ROOT_URL + "/parking-local-tenant-discount-managements"
@@ -34,7 +37,7 @@ BASE_URL = ROOT_URL + "/parking-local-tenant-discount-managements"
 HERE = (
     Path(sys.executable).resolve().parent
     if getattr(sys, "frozen", False)
-    else Path(__file__).resolve().parent
+    else Path(__file__).resolve().parent.parent  # src/ → 앱 루트
 )
 CONFIG_DIR = HERE / "config"
 CONFIG_DIR.mkdir(exist_ok=True)
@@ -52,8 +55,7 @@ if (_legacy_cfg.exists() or _legacy_sess.exists()) and not CONFIG_PATH.exists():
         if _legacy_sess.exists():
             with open(_legacy_sess, encoding="utf-8") as f:
                 merged["session"] = json.load(f)
-        with open(CONFIG_PATH, "w", encoding="utf-8") as f:
-            json.dump(merged, f, ensure_ascii=False, indent=2)
+        jsonstore.save(CONFIG_PATH, merged, private=True)
         _legacy_cfg.unlink(missing_ok=True)
         _legacy_sess.unlink(missing_ok=True)
     except Exception:
@@ -74,7 +76,6 @@ COMMON_HEADERS = {
     "sec-ch-ua-platform": '"Windows"',
 }
 
-# server.py 가 참조하는 권종 테이블 — npdc.TICKETS 와 동일한 구조.
 # discountId(=discountTicketId) 는 주차장별로 달라 런타임에 classification 으로 매칭한다.
 TICKETS = {
     "free": {
@@ -94,25 +95,28 @@ class IparkingError(RuntimeError):
 
 
 # ---------- 세션(HTTP) ----------
+# keep-alive 연결 재사용 — 차량 검색은 워커 8개로 병렬 실행되고, 그 와중에
+# 차량등록 버튼이나 예약이 겹치면 기본 풀(10개)을 넘겨 초과 연결이 버려진다.
+# 그러면 요청마다 TLS 핸드셰이크를 새로 해 사이클이 눈에 띄게 느려진다.
 _session = requests.Session()
+_session.mount("https://", HTTPAdapter(pool_connections=4, pool_maxsize=16))
 _login_lock = threading.Lock()
 
-# Windows 루트 인증서가 오래된 PC 대비 — 기본 검증 실패 시 certifi 로 폴백 (npdc/updater 동일 정책)
+# Windows 루트 인증서가 오래된 PC 대비 — 기본 검증 실패 시 certifi 로 폴백 (updater 와 동일 정책)
 try:
     import certifi
     _CA_BUNDLE = certifi.where()
 except Exception:
     _CA_BUNDLE = True
 
-_auth = {"access": None, "refresh": None, "plid": None}
+_auth = {"access": None, "refresh": None, "plid": None, "gen": 0}
 _tickets_by_class: dict[str, dict] = {}
 
 
 def _load_config() -> dict:
     if not CONFIG_PATH.exists():
         raise IparkingError(f"자격증명 파일 없음: {CONFIG_PATH.name}")
-    with open(CONFIG_PATH, encoding="utf-8") as f:
-        cfg = json.load(f)
+    cfg = jsonstore.load(CONFIG_PATH)
     for k in ("store_id", "user_id", "password"):
         if not cfg.get(k):
             raise IparkingError(f"{CONFIG_PATH.name} 에 {k} 누락")
@@ -120,25 +124,17 @@ def _load_config() -> dict:
 
 
 def _load_session() -> dict | None:
-    if not CONFIG_PATH.exists():
-        return None
-    try:
-        with open(CONFIG_PATH, encoding="utf-8") as f:
-            return json.load(f).get("session")
-    except Exception:
-        return None
+    return jsonstore.load(CONFIG_PATH).get("session")
 
 
 def _save_session() -> None:
-    """통합 파일의 session 키만 갱신 — 자격증명은 보존."""
+    """통합 파일의 session 키만 갱신 — 자격증명은 보존(락 안에서 읽고 쓴다)."""
+    def _mutate(data: dict) -> None:
+        data["session"] = {
+            "access": _auth["access"], "refresh": _auth["refresh"], "plid": _auth["plid"],
+        }
     try:
-        data = {}
-        if CONFIG_PATH.exists():
-            with open(CONFIG_PATH, encoding="utf-8") as f:
-                data = json.load(f)
-        data["session"] = {"access": _auth["access"], "refresh": _auth["refresh"], "plid": _auth["plid"]}
-        with open(CONFIG_PATH, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
+        jsonstore.update(CONFIG_PATH, _mutate, private=True)
     except Exception:
         pass
 
@@ -195,6 +191,7 @@ def _do_login() -> None:
     _auth["access"] = data.get("accessToken")
     _auth["refresh"] = data.get("refreshToken")
     _auth["plid"] = cfg["store_id"]
+    _auth["gen"] += 1
     if not _auth["access"]:
         raise IparkingError("로그인 응답에 accessToken 없음")
     _save_session()
@@ -214,11 +211,28 @@ def _try_refresh() -> bool:
             if data.get("accessToken"):
                 _auth["access"] = data["accessToken"]
                 _auth["refresh"] = data.get("refreshToken") or _auth["refresh"]
+                _auth["gen"] += 1
                 _save_session()
                 return True
     except Exception:
         pass
     return False
+
+
+def _renew_session(seen_gen: int) -> None:
+    """만료된 세션을 한 번만 갱신한다.
+
+    차량 검색은 8개 스레드로 병렬 실행되므로 토큰이 만료되면 여러 스레드가
+    동시에 401 을 받는다. 각자 갱신하면 같은 refresh 토큰으로 중복 요청이 나가고
+    (서버가 토큰을 회전시키면 뒷 요청은 실패) 불필요한 재로그인이 반복된다.
+    락 안에서 세대(gen)를 확인해, 다른 스레드가 이미 갱신했으면 그대로 쓴다.
+    """
+    with _login_lock:
+        if _auth["gen"] != seen_gen:
+            return  # 이미 다른 스레드가 갱신함
+        if _try_refresh():
+            return
+        _do_login()
 
 
 def ensure_session() -> None:
@@ -245,14 +259,14 @@ def reset_session() -> None:
         _auth["access"] = None
         _auth["refresh"] = None
         _auth["plid"] = None
+        _auth["gen"] += 1
         _tickets_by_class.clear()
+    def _drop_session(data: dict) -> None:
+        data.pop("session", None)
+
     try:
         if CONFIG_PATH.exists():
-            with open(CONFIG_PATH, encoding="utf-8") as f:
-                data = json.load(f)
-            data.pop("session", None)
-            with open(CONFIG_PATH, "w", encoding="utf-8") as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
+            jsonstore.update(CONFIG_PATH, _drop_session, private=True)
     except Exception:
         pass
 
@@ -275,6 +289,7 @@ def _is_expired(res: requests.Response) -> bool:
 
 def _api(method: str, path: str, *, params=None, json_body=None, _retried=False) -> requests.Response:
     ensure_session()
+    seen_gen = _auth["gen"]  # 요청에 쓴 토큰의 세대 — 만료 시 중복 갱신 판별용
     res = _request(
         method, BASE_URL + path,
         headers=_auth_headers(),
@@ -282,9 +297,7 @@ def _api(method: str, path: str, *, params=None, json_body=None, _retried=False)
         data=json.dumps(json_body) if json_body is not None else None,
     )
     if not _retried and _is_expired(res):
-        if not _try_refresh():
-            with _login_lock:
-                _do_login()
+        _renew_session(seen_gen)
         return _api(method, path, params=params, json_body=json_body, _retried=True)
     return res
 
