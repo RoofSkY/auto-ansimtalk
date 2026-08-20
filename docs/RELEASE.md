@@ -25,7 +25,18 @@ dev\build_release.bat
 ```
 
 `dist\` 에 `auto-ansimtalk-v1.0.1.zip` 과 `AnsimTalk-Setup.exe` 가 생성된다.
-(사전 준비: `pip install pyinstaller`)
+
+빌드 스크립트는 프로젝트 가상환경(`.venv`)이 있으면 그 파이썬을, 없으면 PATH 의
+파이썬을 사용한다 (실행 시 어느 인터프리터를 쓰는지 로그에 출력).
+
+사전 준비 — 빌드에 쓰는 인터프리터에 PyInstaller 가 있어야 한다:
+
+```bat
+.venv\Scripts\python.exe -m pip install pyinstaller
+```
+
+> PyInstaller 는 빌드 전용이라 `requirements.txt` 에 넣지 않는다
+> (사용자 PC 에는 필요 없음).
 
 ## 3. GitHub Release 만들기 (웹 UI)
 

@@ -28,9 +28,16 @@
 
 ### **수동 설치 (for DEV)** — Windows, Python 3.12+
 
+프로젝트 폴더에 가상환경(`.venv`)을 만들어 쓴다. `start.bat` 과 `dev\build_release.bat`
+모두 `.venv` 가 있으면 자동으로 그쪽 파이썬을 사용한다.
+
 ```bat
-pip install -r requirements.txt
+python -m venv .venv
+.venv\Scripts\python.exe -m pip install -r requirements.txt
+.venv\Scripts\python.exe -m pip install pyinstaller   :: 릴리스 빌드용 (선택)
 ```
+
+실행은 `start.bat` (백그라운드) 또는 `.venv\Scripts\python.exe server.py`.
 
 ## 초기 설정 — 설정페이지
 
@@ -70,6 +77,8 @@ auto-ansimtalk/
 - 화면의 Tailwind 클래스를 수정하면 `dev\build_css.bat` 로 CSS 재생성
   (Tailwind CLI 는 용량이 커서 git 에 없음 — [릴리스](https://github.com/tailwindlabs/tailwindcss/releases) 에서 받아 `dev\bin\tailwindcss.exe` 로 배치)
 - Release 만드는 방법: [docs/RELEASE.md](docs/RELEASE.md)
+- 빌드·실행 스크립트는 `.venv` 를 우선 사용 — 없으면 PATH 의 파이썬으로 폴백
+  (릴리스 zip 에는 `.venv` 가 포함되지 않아 사용자 PC 동작은 그대로)
 - 아이파킹(주차) 연동은 순수 HTTP REST API (`iparking.py`) — 세션 토큰은 만료 시 자동 재발급
 
 ## 문제 해결
