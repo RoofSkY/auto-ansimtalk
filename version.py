@@ -1,6 +1,6 @@
 """앱 버전 정보 — 릴리스 시 __version__ 만 올리면 됨 (릴리스 태그는 v{__version__})."""
 
-__version__ = "1.3.1"
+__version__ = "1.3.2"
 
 APP_NAME = "auto-ansimtalk"
 APP_TITLE = "등하원차량등록"

@@ -15,9 +15,11 @@
 import json
 import os
 import shutil
+import stat
 import subprocess
 import sys
 import threading
+import time
 from pathlib import Path
 
 _locks: dict[str, threading.RLock] = {}
@@ -33,6 +35,32 @@ def lock_for(path: Path) -> threading.RLock:
             lk = threading.RLock()
             _locks[key] = lk
         return lk
+
+
+def _clear_readonly(path: Path) -> None:
+    """읽기 전용 속성 해제 — 복사해 온 파일에 붙어 있으면 os.replace 가 거부된다."""
+    try:
+        if path.exists():
+            os.chmod(path, stat.S_IWRITE | stat.S_IREAD)
+    except OSError:
+        pass
+
+
+def _replace(tmp: Path, path: Path) -> None:
+    """tmp → path 원자적 교체.
+
+    읽기 전용 속성(WinError 5)과 백신·클라우드 동기화의 일시적 잠금(WinError 32)이
+    둘 다 PermissionError 로 올라온다 — 속성을 풀고 잠깐 기다렸다 다시 시도한다.
+    """
+    for attempt in range(4):
+        try:
+            os.replace(tmp, path)
+            return
+        except PermissionError:
+            if attempt == 3:
+                raise
+            _clear_readonly(path)
+            time.sleep(0.15 * (attempt + 1))
 
 
 def load(path: Path) -> dict:
@@ -69,7 +97,7 @@ def save(path: Path, data: dict | list, *, private: bool = False) -> None:
                 json.dump(data, f, ensure_ascii=False, indent=2)
                 f.flush()
                 os.fsync(f.fileno())
-            os.replace(tmp, path)
+            _replace(tmp, path)
         finally:
             # 실패했다면 평문이 담긴 임시파일을 남기지 않는다
             try:
@@ -134,13 +162,15 @@ def restrict_permissions(path: Path) -> None:
         except OSError:
             pass
         return
+    _clear_readonly(path)
     user = os.environ.get("USERNAME") or ""
     if not user:
         return
     try:
         subprocess.run(
+            # (M) — (R,W) 는 삭제 권한이 없어 이후 os.replace 가 거부된다
             ["icacls", str(path), "/inheritance:r",
-             "/grant:r", f"{user}:(R,W)",
+             "/grant:r", f"{user}:(M)",
              "/grant:r", "SYSTEM:(F)",
              "/grant:r", "Administrators:(F)"],
             capture_output=True, timeout=10,

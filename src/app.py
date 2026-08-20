@@ -115,7 +115,13 @@ def load_students() -> list[dict]:
             s["id"] = uuid.uuid4().hex
             needs_save = True
     if needs_save:
-        return save_students(raw)
+        try:
+            return save_students(raw)
+        except Exception as e:
+            # 여기서 예외가 올라가면 State() 가 임포트 단계에서 터져 앱이 아예 뜨지 않는다.
+            # 저장은 실패해도 읽어 둔 데이터로 기동시킨다.
+            print(f"students.json 저장 실패 — 메모리 데이터로 계속합니다: {e}",
+                  file=sys.stderr)
     return sorted(raw, key=_student_sort_key)
 
 
