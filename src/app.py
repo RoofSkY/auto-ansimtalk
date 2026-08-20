@@ -61,6 +61,7 @@ DEFAULT_CONFIG = {
     "vehicle_toast": True,
     "vehicle_toast_duration": 5,
     "att_sync": True,
+    "vehicle_ticket_count": 1,  # 차량등록 버튼이 등록할 1시간 무료권 매수
     "refresh_interval": 60,  # 차량 자동검색 + 등하원 상태 동기화 공통 갱신 주기 (초)
 }
 
@@ -68,6 +69,7 @@ ATT_STATUSES = ["미등원", "등원", "하원", "결석", "공결", "캠프"]
 
 DAY_LABELS = ["월", "화", "수", "목", "금"]
 TICKET_DISPLAY_ORDER = ["free", "paid"]
+DEFAULT_VEHICLE_TICKET = "free"  # 차량등록 버튼이 쓰는 권종
 PORT = 5000
 
 
@@ -414,10 +416,21 @@ def _update_att_from_message(code: str, msg: str) -> None:
         rec["in" if new_status == "등원" else "out"] = True
 
 
+def _vehicle_ticket_count() -> int:
+    """차량등록 버튼이 등록할 매수 — 설정값을 권종의 최대 매수 안으로 제한."""
+    limit = iparking.TICKETS[DEFAULT_VEHICLE_TICKET]["max"]
+    try:
+        n = int(state.config.get("vehicle_ticket_count", 1))
+    except (TypeError, ValueError):
+        n = 1
+    return min(limit, max(1, n))
+
+
 def do_vehicle(student: dict, tickets: dict[str, int] | None = None,
                tag: str = "차량등록") -> None:
     if tickets is None:
-        tickets = {"free": 1}
+        # 설정에서 정한 매수만큼 등록 (예약은 자체 매수를 넘겨받으므로 여기 오지 않음)
+        tickets = {DEFAULT_VEHICLE_TICKET: _vehicle_ticket_count()}
     name = student.get("name", "")
 
     cars = list(student.get("car_no4s") or [])
@@ -1001,6 +1014,7 @@ async def settings_page(request: Request):
         "ansim_user_id": (_load_ansim_account().get("user_id") or "").strip(),
         "iparking_store_id": (ip_acc.get("store_id") or "").strip(),
         "iparking_user_id": (ip_acc.get("user_id") or "").strip(),
+        "vehicle_ticket_max": iparking.TICKETS[DEFAULT_VEHICLE_TICKET]["max"],
         "version": __version__,
         "autostart_enabled": autostart.is_enabled(),
     })
@@ -1176,6 +1190,14 @@ async def update_settings(request: Request):
         try:
             state.config["refresh_interval"] = max(10, int(raw))
         except ValueError:
+            pass
+    raw = form.get("vehicle_ticket_count")
+    if raw:
+        try:
+            # 할인권 자체의 최대 적용 매수를 넘지 않도록 제한
+            limit = iparking.TICKETS[DEFAULT_VEHICLE_TICKET]["max"]
+            state.config["vehicle_ticket_count"] = min(limit, max(1, int(raw)))
+        except (ValueError, KeyError):
             pass
     save_config(state.config)
     return _settings_saved("설정")
