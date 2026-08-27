@@ -57,13 +57,15 @@
         </label>
 
         <div>
-            <label class="block text-sm text-gray-500 dark:text-gray-400 mb-1">
-                차량등록 매수 — 차량등록 버튼이 등록할 1시간 무료권 (최대 {{ vehicle_ticket_max }}개)
-            </label>
+            <label class="block text-sm text-gray-500 dark:text-gray-400 mb-1">차량등록 매수</label>
             <div class="flex gap-2 items-center">
-                <input name="vehicle_ticket_count" type="number"
-                       value="{{ config.vehicle_ticket_count }}" min="1" max="{{ vehicle_ticket_max }}"
-                       class="px-3 py-1.5 border rounded dark:bg-gray-700 dark:border-gray-600 w-32">
+                <input type="hidden" name="vehicle_ticket_count" value="{{ config.vehicle_ticket_count }}">
+                <button type="button" onclick="cycleTicket(this)"
+                        class="ticket-btn px-3 py-1.5 border rounded text-sm whitespace-nowrap"
+                        data-color="{{ vehicle_ticket.color }}"
+                        data-max="{{ vehicle_ticket.max }}"
+                        data-label="{{ vehicle_ticket.label }}"
+                        title="클릭할 때마다 매수 증가 (최대 {{ vehicle_ticket.max }}매)"></button>
                 <button class="px-4 py-1.5 bg-blue-500 hover:bg-blue-600 text-white rounded text-sm">저장</button>
             </div>
         </div>
@@ -172,6 +174,35 @@
             opacity-0 transition-opacity duration-500"></div>
 
 <script>
+function renderTicketBtn(btn) {
+    const input = btn.previousElementSibling;
+    const v = parseInt(input.value) || 0;
+    const label = btn.dataset.label;
+    btn.textContent = `${label} × ${v}`;
+    if (v > 0) {
+        btn.style.backgroundColor = btn.dataset.color;
+        btn.style.color = '#1f2937';
+        btn.style.borderColor = '#9ca3af';
+        btn.style.fontWeight = '600';
+    } else {
+        btn.style.backgroundColor = '';
+        btn.style.color = '';
+        btn.style.borderColor = '';
+        btn.style.fontWeight = '';
+        btn.classList.add('text-gray-500', 'dark:text-gray-400', 'border-gray-300', 'dark:border-gray-500');
+    }
+}
+
+function cycleTicket(btn) {
+    const input = btn.previousElementSibling;
+    const max = parseInt(btn.dataset.max) || 1;
+    let v = (parseInt(input.value) || 0) + 1;
+    if (v > max) v = 1;   // 차량등록 버튼은 최소 1장 등록 — 0 은 건너뜀
+    input.value = v;
+    renderTicketBtn(btn);
+}
+document.querySelectorAll('.ticket-btn').forEach(renderTicketBtn);
+
 function showSaved(text, ok = true) {
     const el = document.getElementById('save-toast');
     el.textContent = text;

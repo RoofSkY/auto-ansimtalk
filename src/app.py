@@ -1001,7 +1001,7 @@ async def settings_page(request: Request):
         "ansim_user_id": (_load_ansim_account().get("user_id") or "").strip(),
         "iparking_store_id": (ip_acc.get("store_id") or "").strip(),
         "iparking_user_id": (ip_acc.get("user_id") or "").strip(),
-        "vehicle_ticket_max": iparking.TICKETS[DEFAULT_VEHICLE_TICKET]["max"],
+        "vehicle_ticket": iparking.TICKETS[DEFAULT_VEHICLE_TICKET],
         "version": __version__,
         "autostart_enabled": autostart.is_enabled(),
     })
