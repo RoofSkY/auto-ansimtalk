@@ -22,6 +22,20 @@
             </div>
             {% for ttype in ticket_order %}
                 {% if ttype in tickets %}
+                {% if tickets[ttype].entry == "number" %}
+                <div>
+                    <label class="ticket-box px-3 py-1.5 border rounded text-sm whitespace-nowrap"
+                           style="cursor:text;display:inline-block" data-color="{{ tickets[ttype].color }}"
+                           title="숫자 부분을 직접 입력 (최대 {{ tickets[ttype].max }}매)">
+                        <span>{{ tickets[ttype].label }} ×</span>
+                        <input type="number" name="tk_{{ ttype }}" value="0" min="0" max="{{ tickets[ttype].max }}"
+                               oninput="renderTicketBox(this.closest('.ticket-box'))"
+                               onblur="if(this.value==='')this.value=0;renderTicketBox(this.closest('.ticket-box'))"
+                               class="ticket-num"
+                               style="width:3.5ch;background:transparent;border:0;outline:none;color:inherit;font:inherit;padding:0;text-align:left">
+                    </label>
+                </div>
+                {% else %}
                 <div>
                     <input type="hidden" name="tk_{{ ttype }}" value="0">
                     <button type="button" onclick="cycleTicket(this)"
@@ -31,6 +45,7 @@
                             data-label="{{ tickets[ttype].label }}"
                             title="클릭할 때마다 매수 증가 (최대 {{ tickets[ttype].max }}매, 초과 시 0)"></button>
                 </div>
+                {% endif %}
                 {% endif %}
             {% endfor %}
         </div>
@@ -60,6 +75,19 @@
                 <input name="car_no4" value="{{ s.car_no4 }}" placeholder="차량" class="px-2 py-1 border rounded dark:bg-gray-600 dark:border-gray-500 w-20">
                 {% for ttype in ticket_order %}
                     {% if ttype in tickets %}
+                    {% if tickets[ttype].entry == "number" %}
+                    <label class="ticket-box px-2 py-1 border rounded text-sm whitespace-nowrap"
+                           style="cursor:text;display:inline-block" data-color="{{ tickets[ttype].color }}"
+                           title="숫자 부분을 직접 입력 (최대 {{ tickets[ttype].max }}매)">
+                        <span>{{ tickets[ttype].label }} ×</span>
+                        <input type="number" name="tk_{{ ttype }}" value="{{ s.tickets.get(ttype, 0) }}"
+                               min="0" max="{{ tickets[ttype].max }}"
+                               oninput="renderTicketBox(this.closest('.ticket-box'))"
+                               onblur="if(this.value==='')this.value=0;renderTicketBox(this.closest('.ticket-box'))"
+                               class="ticket-num"
+                               style="width:3.5ch;background:transparent;border:0;outline:none;color:inherit;font:inherit;padding:0;text-align:left">
+                    </label>
+                    {% else %}
                     <div>
                         <input type="hidden" name="tk_{{ ttype }}" value="{{ s.tickets.get(ttype, 0) }}">
                         <button type="button" onclick="cycleTicket(this)"
@@ -69,6 +97,7 @@
                                 data-label="{{ tickets[ttype].label }}"
                                 title="클릭할 때마다 매수 증가 (최대 {{ tickets[ttype].max }}매, 초과 시 0)"></button>
                     </div>
+                    {% endif %}
                     {% endif %}
                 {% endfor %}
                 <div class="flex gap-2 items-center">
@@ -101,9 +130,8 @@ function formatTimeInput(input) {
 function renderTicketBtn(btn) {
     const input = btn.previousElementSibling;   // hidden tk_* input
     const v = parseInt(input.value) || 0;
-    const max = parseInt(btn.dataset.max) || 1;
     const label = btn.dataset.label;
-    btn.textContent = (v > 0 && max > 1) ? `${label} ×${v}` : label;
+    btn.textContent = `${label} × ${v}`;   // 0 도 × 0 으로 — 유료권 칩과 표기·간격 통일
     if (v > 0) {
         btn.style.backgroundColor = btn.dataset.color;
         btn.style.color = '#1f2937';
@@ -127,6 +155,39 @@ function cycleTicket(btn) {
     renderTicketBtn(btn);
 }
 
+/* 숫자만 입력 가능한 권종 칩 — 매수가 있으면 순환 버튼과 같은 색으로 칠한다 */
+function renderTicketBox(box) {
+    const input = box.querySelector('input');
+    let v = parseInt(input.value) || 0;
+    const max = parseInt(input.max) || 1;
+    if (v > max) v = max;
+    if (v < 0) v = 0;
+    // 상한 초과 고정 + "05" 처럼 앞에 남은 0 제거 (빈 칸은 blur 때 0으로 채움)
+    if (input.value !== '' && input.value !== String(v)) input.value = v;
+    // 자릿수만큼만 폭을 차지 — × 와 숫자 사이 간격이 자릿수와 무관하게 일정해진다
+    input.style.width = (Math.max(input.value.length, 1) + 0.7) + 'ch';
+    if (v > 0) {
+        box.style.backgroundColor = box.dataset.color;
+        box.style.color = '#1f2937';
+        box.style.borderColor = '#9ca3af';
+        box.style.fontWeight = '600';
+    } else {
+        box.style.backgroundColor = '';
+        box.style.color = '';
+        box.style.borderColor = '';
+        box.style.fontWeight = '';
+        box.classList.add('text-gray-500', 'dark:text-gray-400', 'border-gray-300', 'dark:border-gray-500');
+    }
+}
+
 document.querySelectorAll('.ticket-btn').forEach(renderTicketBtn);
+document.querySelectorAll('.ticket-box').forEach(renderTicketBox);
 </script>
+
+<style>
+/* 칩 안 숫자 입력칸의 스핀 버튼 제거 — 좁은 칸에서 화살표가 숫자를 가린다 */
+.ticket-num::-webkit-outer-spin-button,
+.ticket-num::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+.ticket-num { -moz-appearance: textfield; appearance: textfield; }
+</style>
 {% endblock %}

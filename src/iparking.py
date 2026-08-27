@@ -23,7 +23,6 @@ import hashlib
 import json
 import sys
 import threading
-import time
 from pathlib import Path
 
 import requests
@@ -43,24 +42,6 @@ CONFIG_DIR = HERE / "config"
 CONFIG_DIR.mkdir(exist_ok=True)
 CONFIG_PATH = CONFIG_DIR / "iparking.json"  # 자격증명 + 세션 통합
 
-# 구버전 분리 파일(iparking_config.json + iparking_session.json)을 통합 파일로 이관
-_legacy_cfg = CONFIG_DIR / "iparking_config.json"
-_legacy_sess = CONFIG_DIR / "iparking_session.json"
-if (_legacy_cfg.exists() or _legacy_sess.exists()) and not CONFIG_PATH.exists():
-    try:
-        merged = {}
-        if _legacy_cfg.exists():
-            with open(_legacy_cfg, encoding="utf-8") as f:
-                merged.update(json.load(f))
-        if _legacy_sess.exists():
-            with open(_legacy_sess, encoding="utf-8") as f:
-                merged["session"] = json.load(f)
-        jsonstore.save(CONFIG_PATH, merged, private=True)
-        _legacy_cfg.unlink(missing_ok=True)
-        _legacy_sess.unlink(missing_ok=True)
-    except Exception:
-        pass
-
 COMMON_HEADERS = {
     "Accept": "application/json",
     "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7",
@@ -77,14 +58,16 @@ COMMON_HEADERS = {
 }
 
 # discountId(=discountTicketId) 는 주차장별로 달라 런타임에 classification 으로 매칭한다.
+# entry: 예약 화면의 매수 UI — "cycle"=클릭 순환 버튼, "number"=숫자 입력 칩.
+# max(최대 적용 매수)와 분리해 두어야 상한만 조정해도 UI 모양이 바뀌지 않는다.
 TICKETS = {
     "free": {
         "classification": "FREE", "label": "1시간 무료권",
-        "max": 2, "color": "#E7F3FF",
+        "max": 2, "entry": "cycle", "color": "#E7F3FF",
     },
     "paid": {
         "classification": "PAID", "label": "1시간 유료권",
-        "max": 2, "color": "#FFF5D8",
+        "max": 100, "entry": "number", "color": "#FFF5D8",
     },
 }
 DEFAULT_TICKET = "free"
@@ -229,7 +212,7 @@ def _renew_session(seen_gen: int) -> None:
     """
     with _login_lock:
         if _auth["gen"] != seen_gen:
-            return  # 이미 다른 스레드가 갱신함
+            return
         if _try_refresh():
             return
         _do_login()
@@ -325,7 +308,7 @@ def _load_store_tickets(force: bool = False) -> dict[str, dict]:
 
 # ---------- 차량 조회 ----------
 def find_in_cars(car_no4: str) -> list[dict]:
-    """입차 차량 목록. 각 항목에 npdc 호환용 carNo(전체 번호판) 별칭 추가."""
+    """입차 차량 목록. 각 항목에 carNo(전체 번호판) 별칭 추가."""
     res = _api("GET", f"/api/v1/stores/completions/{_plid()}/in/{car_no4}")
     res.raise_for_status()
     items = res.json() or []
@@ -350,7 +333,10 @@ def find_in_car(car_no4: str, full_plate: str | None = None) -> dict | None:
 
 
 # ---------- 할인권 적용 ----------
-def apply_discount(in_car: dict, ticket_type: str = DEFAULT_TICKET) -> tuple[bool, str]:
+def apply_discount(in_car: dict, ticket_type: str = DEFAULT_TICKET,
+                   count: int = 1) -> tuple[bool, str]:
+    """할인권 적용. count 는 bulk-apply 의 applyCount 로 전달 — 취소(bulk-cancel 의
+    applyCancelCount)와 같은 방식이라 여러 장도 한 번의 호출로 등록된다."""
     spec = TICKETS.get(ticket_type)
     if not spec:
         return False, f"알 수 없는 권종: {ticket_type}"
@@ -389,7 +375,7 @@ def apply_discount(in_car: dict, ticket_type: str = DEFAULT_TICKET) -> tuple[boo
         "parkingLotId": plid,
         "carNumber": car_number,
         "discountTicketId": discount_id,
-        "applyCount": 1,
+        "applyCount": count,
         "memo": "",
     }
     ares = _api(
@@ -398,7 +384,8 @@ def apply_discount(in_car: dict, ticket_type: str = DEFAULT_TICKET) -> tuple[boo
         json_body=abody,
     )
     if ares.ok:
-        return True, f"{spec['label']} 등록 성공"
+        return True, (f"{spec['label']} {count}매 등록 성공" if count > 1
+                      else f"{spec['label']} 등록 성공")
     return False, _apply_error_message(ares, spec)
 
 
