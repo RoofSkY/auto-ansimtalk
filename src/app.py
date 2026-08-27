@@ -1171,8 +1171,10 @@ async def health():
 
 @app.post("/api/shutdown")
 async def shutdown():
+    emit_event("server_shutdown", {})  # 다른 탭·페이지도 종료 화면을 그리도록
+
     def _exit():
-        time.sleep(0.3)
+        time.sleep(0.5)  # 응답과 SSE 이벤트가 나갈 시간
         os._exit(0)
     threading.Thread(target=_exit, daemon=True).start()
     return {"ok": True}
@@ -1398,6 +1400,11 @@ def _run_tray():
         _open_browser()
 
     def on_quit(icon, _item):
+        # 브라우저들이 종료 화면을 그리도록 먼저 알리고, 이벤트가 SSE 로
+        # 나갈 시간을 준 뒤 정리한다. icon.stop() 을 건너뛰고 죽으면
+        # 트레이에 유령 아이콘이 남는다.
+        emit_event("server_shutdown", {})
+        time.sleep(0.5)
         icon.stop()
         os._exit(0)
 

@@ -114,11 +114,27 @@
         }
         return {
             start: open,
+            stop() {
+                clearTimeout(timer);
+                if (es) { es.close(); es = null; }
+            },
             on(handler) {
                 window.addEventListener('sse', (e) => handler(e.detail));
             },
         };
     })();
+
+    /* 서버 종료 화면 — 설정의 종료 버튼과 트레이 '종료'가 같은 화면을 쓴다 */
+    window.showServerStopped = function () {
+        window.sseBus.stop();  // 재연결 루프 방지
+        document.body.innerHTML =
+            '<div style="padding:3rem;text-align:center;font-family:Malgun Gothic,sans-serif">' +
+            '<h2 style="font-size:1.5rem;margin-bottom:1rem">서버가 종료되었습니다.</h2>' +
+            '</div>';
+    };
+    window.sseBus.on((msg) => {
+        if (msg.type === 'server_shutdown') window.showServerStopped();
+    });
 
     function vehicleToasts() {
         return {

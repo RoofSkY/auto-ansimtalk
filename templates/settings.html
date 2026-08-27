@@ -258,14 +258,10 @@ function waitForRestart(status) {
 }
 
 async function shutdownServer() {
-    if (!confirm('서버를 종료할까요? 자동 입출차 감지와 예약이 모두 멈춥니다.')) return;
+    if (!confirm('서버를 종료하시겠습니까?')) return;
     try { await fetch('/api/shutdown', { method: 'POST' }); } catch (e) {}
-    setTimeout(() => {
-        document.body.innerHTML =
-            '<div style="padding:3rem;text-align:center;font-family:Malgun Gothic,sans-serif">' +
-            '<h2 style="font-size:1.5rem;margin-bottom:1rem">서버가 종료되었습니다.</h2>' +
-            '</div>';
-    }, 400);
+    // 보통은 서버의 server_shutdown SSE 가 화면을 그린다 — 못 받았을 때의 안전망
+    setTimeout(() => window.showServerStopped(), 800);
 }
 </script>
 {% endblock %}
