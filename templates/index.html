@@ -15,7 +15,7 @@
         </div>
         <div class="flex gap-1 mb-2 flex-wrap">
             <template x-for="st in statusTabs" :key="st">
-                <button @click="statusFilter = st"
+                <button @click="statusFilter = st; syncAtt()"
                         class="px-2.5 py-1 rounded border text-xs font-semibold whitespace-nowrap tabular-nums"
                         :class="statusFilter === st
                             ? 'bg-blue-500 border-blue-500 text-white'
@@ -269,6 +269,14 @@ function mainApp() {
             if (!box) return;
             const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 5;
             this.autoScroll = atBottom;
+        },
+
+        async syncAtt() {
+            // 상태 필터 탭 클릭 시 등하원 상태만 즉시 갱신 — 최신 상태로 분류되도록.
+            // 연타해도 서버의 wake 이벤트가 진행 중 갱신 1회로 합쳐 준다.
+            try {
+                await fetch('/api/refresh?scope=att', { method: 'POST' });
+            } catch (e) {}
         },
 
         async manualRefresh(ev) {

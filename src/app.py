@@ -228,7 +228,7 @@ class State:
         # 등하원 상태는 메모리로만 관리 — 재시작 시 첫 동기화가 다시 채움
         self.att = {"date": date.today().isoformat(), "status": {}, "times": {}}
         self.prev_in_cars: set[str] = set()
-        self.last_seen_carNo: dict[str, str] = {}
+        self.last_seen_plate: dict[str, str] = {}
         # 입출차 판정 기준이 잡힌 차량 — 처음 확인된 차량은 알림 없이 기준만 잡는다
         self.poll_baseline: set[str] = set()
         self._poll_failing = False  # 차량 조회 실패 상태 — 로그를 주기마다 반복하지 않기 위함
@@ -417,10 +417,6 @@ def do_vehicle(student: dict, tickets: dict[str, int] | None = None,
     name = student.get("name", "")
 
     cars = list(student.get("car_no4s") or [])
-    if not cars:
-        single = student.get("car_no4", "")
-        if single:
-            cars = [single]
     parsed = [(c, p) for c in cars if (p := _parse_car_entry(c))]
 
     cars_label = ",".join(c for c, _ in parsed) if parsed else (",".join(cars) if cars else "")
@@ -470,10 +466,8 @@ def do_vehicle(student: dict, tickets: dict[str, int] | None = None,
                             break
                         ok_count += 1
                     ok = ok_count == count
-                if count > 1:
-                    summary = f"{ticket['label']} {ok_count}/{count}매 - {msg}"
-                else:
-                    summary = f"{ticket['label']} - {msg}"
+                done = f"{ok_count}/{count}" if 0 < ok_count < count else f"{count}"
+                summary = f"{ticket['label']} {done}매 - {msg}"
                 emit_log(tag, car_target, summary, ok)
             except Exception as e:
                 emit_log(tag, car_target, f"{ticket['label']} 오류: {e}", False)
@@ -544,9 +538,19 @@ def _refresh_tick(manual_tasks: set[str] | None) -> set[str] | None:
         interval = max(10, int(state.config.get("refresh_interval", 60)))
     except Exception:
         interval = 60
-    state.next_refresh_ts = time.time() + interval
-    emit_event("refreshed", {"next_in": interval})
-    if state.refresh_wake.wait(timeout=interval):
+    # 범위 지정 수동 갱신(상태 탭 클릭·등하원처리 후)은 주기 카운트다운을 건드리지
+    # 않는다 — 리셋하면 탭을 자주 누를수록 주기 갱신(차량 검색 포함)이 계속 밀린다.
+    # 전체 수동 갱신(새로고침 버튼)과 주기 도래는 지금까지처럼 카운트다운을 재시작.
+    partial = manual_tasks is not None and manual_tasks < {"att", "vehicle"}
+    if partial:
+        remaining = state.next_refresh_ts - time.time()
+        if remaining <= 0:
+            return None  # 대기 중 주기가 이미 도래 — 다음 틱을 주기 갱신으로
+    else:
+        remaining = interval
+        state.next_refresh_ts = time.time() + interval
+    emit_event("refreshed", {"next_in": round(remaining)})
+    if state.refresh_wake.wait(timeout=remaining):
         state.refresh_wake.clear()
         tasks = state.wake_tasks or {"att", "vehicle"}
         state.wake_tasks = set()
@@ -634,12 +638,12 @@ def _poll_once():
         for entry in entries:
             full = entry_to_full[entry]
             if full:
-                match = next((c for c in cars if (c.get("carNo") or "") == full), None)
+                match = next((c for c in cars if (c.get("carNumber") or "") == full), None)
             else:
                 match = cars[0]
             if match:
                 current.add(entry)
-                state.last_seen_carNo[entry] = match.get("carNo") or entry
+                state.last_seen_plate[entry] = match.get("carNumber") or entry
 
     # 기준(baseline)은 차량별로 잡는다. 전체가 성공해야 기준을 잡는 방식이면
     # 특정 차량 하나만 계속 실패해도 입출차 알림이 영영 발생하지 않는다.
@@ -651,13 +655,13 @@ def _poll_once():
     for entry in entered:
         s = entry_to_student.get(entry) or {}
         name = s.get("name", "")
-        full_name = state.last_seen_carNo.get(entry, entry)
+        full_name = state.last_seen_plate.get(entry, entry)
         emit_log("입차", name, full_name, True)
         _notify_vehicle("입차", name, full_name)
     for entry in exited:
         s = entry_to_student.get(entry) or {}
         name = s.get("name", "")
-        full_name = state.last_seen_carNo.get(entry, entry)
+        full_name = state.last_seen_plate.get(entry, entry)
         emit_log("출차", name, full_name, True)
         _notify_vehicle("출차", name, full_name)
 
@@ -780,7 +784,7 @@ def _scheduler_tick() -> None:
         if car and tickets:
             threading.Thread(
                 target=do_vehicle,
-                args=({"name": label, "car_no4": car}, tickets, "차량등록(예약)"),
+                args=({"name": label, "car_no4s": [car]}, tickets, "차량등록(예약)"),
                 daemon=True,
             ).start()
 
@@ -1047,9 +1051,12 @@ async def list_students():
 
 
 @app.post("/api/refresh")
-async def manual_refresh():
-    """수동 새로고침 — 차량 검색 + 등하원 상태 동기화를 즉시 실행."""
-    _trigger_refresh()
+async def manual_refresh(scope: str = ""):
+    """수동 새로고침. scope="att"/"vehicle" 로 범위 제한, 없으면 둘 다 즉시 실행."""
+    if scope in ("att", "vehicle"):
+        _trigger_refresh(scope)
+    else:
+        _trigger_refresh()
     return {"ok": True}
 
 

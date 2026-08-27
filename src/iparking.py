@@ -23,6 +23,7 @@ import hashlib
 import json
 import sys
 import threading
+import urllib.parse
 from pathlib import Path
 
 import requests
@@ -308,15 +309,12 @@ def _load_store_tickets(force: bool = False) -> dict[str, dict]:
 
 # ---------- 차량 조회 ----------
 def find_in_cars(car_no4: str) -> list[dict]:
-    """입차 차량 목록. 각 항목에 carNo(전체 번호판) 별칭 추가."""
+    """입차 차량 목록 (각 항목의 전체 번호판은 carNumber)."""
     res = _api("GET", f"/api/v1/stores/completions/{_plid()}/in/{car_no4}")
     res.raise_for_status()
     items = res.json() or []
     if not isinstance(items, list):
         items = items.get("list") or items.get("data") or []
-    for it in items:
-        if "carNo" not in it:
-            it["carNo"] = it.get("carNumber") or ""
     return items
 
 
@@ -326,13 +324,35 @@ def find_in_car(car_no4: str, full_plate: str | None = None) -> dict | None:
         return None
     if full_plate:
         for it in items:
-            if (it.get("carNo") or it.get("carNumber") or "") == full_plate:
+            if (it.get("carNumber") or "") == full_plate:
                 return it
         return None
     return items[0]
 
 
 # ---------- 할인권 적용 ----------
+def _result_message(res: requests.Response) -> str:
+    """응답의 서버 메시지. 성공은 본문 resultMessage, 실패는 Result-Message 헤더.
+
+    실패 응답은 본문이 비고 헤더에만 메시지가 오며, percent-encoding
+    (공백은 +, 줄바꿈 포함)이라 unquote_plus 로 풀고 한 줄로 만든다.
+    """
+    if res.ok:
+        try:
+            msg = (res.json() or {}).get("resultMessage") or ""
+            if msg:
+                return msg
+        except ValueError:
+            pass
+    raw = res.headers.get("result-message") or ""
+    if raw:
+        try:
+            return " ".join(urllib.parse.unquote_plus(raw).split())
+        except Exception:
+            pass
+    return ""
+
+
 def apply_discount(in_car: dict, ticket_type: str = DEFAULT_TICKET,
                    count: int = 1) -> tuple[bool, str]:
     """할인권 적용. count 는 bulk-apply 의 applyCount 로 전달 — 취소(bulk-cancel 의
@@ -351,7 +371,7 @@ def apply_discount(in_car: dict, ticket_type: str = DEFAULT_TICKET,
 
     discount_id = ticket.get("discountId")
     plid = _plid()
-    car_number = in_car.get("carNumber") or in_car.get("carNo") or ""
+    car_number = in_car.get("carNumber") or ""
     phid = in_car.get("parkingHistoryId")
     if not phid:
         return False, "차량 식별자(parkingHistoryId) 없음"
@@ -368,7 +388,7 @@ def apply_discount(in_car: dict, ticket_type: str = DEFAULT_TICKET,
         json_body=vbody,
     )
     if not vres.ok:
-        return False, _apply_error_message(vres, spec)
+        return False, _result_message(vres) or _apply_error_message(vres)
 
     abody = {
         "parkingHistoryId": phid,
@@ -384,9 +404,8 @@ def apply_discount(in_car: dict, ticket_type: str = DEFAULT_TICKET,
         json_body=abody,
     )
     if ares.ok:
-        return True, (f"{spec['label']} {count}매 등록 성공" if count > 1
-                      else f"{spec['label']} 등록 성공")
-    return False, _apply_error_message(ares, spec)
+        return True, _result_message(ares) or "등록 성공"
+    return False, _result_message(ares) or _apply_error_message(ares)
 
 
 def cancel_discount(in_car: dict, ticket_type: str = DEFAULT_TICKET, count: int = 1) -> tuple[bool, str]:
@@ -403,7 +422,7 @@ def cancel_discount(in_car: dict, ticket_type: str = DEFAULT_TICKET, count: int 
 
     discount_id = ticket.get("discountId")
     plid = _plid()
-    car_number = in_car.get("carNumber") or in_car.get("carNo") or ""
+    car_number = in_car.get("carNumber") or ""
     phid = in_car.get("parkingHistoryId")
     if not phid:
         return False, "차량 식별자(parkingHistoryId) 없음"
@@ -423,21 +442,12 @@ def cancel_discount(in_car: dict, ticket_type: str = DEFAULT_TICKET, count: int 
     )
     if res.ok:
         return True, f"{spec['label']} {count}장 취소 성공"
-    return False, _apply_error_message(res, spec)
+    return False, _result_message(res) or _apply_error_message(res)
 
 
-def _apply_error_message(res: requests.Response, spec: dict) -> str:
+def _apply_error_message(res: requests.Response) -> str:
+    """서버가 Result-Message 를 주지 않은 실패의 최종 폴백 — 진단 정보만 남긴다."""
     rc = res.headers.get("result-code")
-    table = {
-        "70200": "해당 할인권의 잔여 개수가 없습니다",
-        "70100": f"{spec['label']} 최대 적용 개수를 초과했습니다",
-        "70104": "할인권을 적용할 수 없습니다",
-        "1407": "주차요금 결제 진행 중이라 적용 불가",
-        "1303": "이미 출차한 차량이라 적용 불가",
-        "1416": "출차 대기 중인 차량이라 적용 불가",
-    }
-    if rc in table:
-        return table[rc]
     return f"등록 실패 (result-code={rc}, HTTP {res.status_code})"
 
 
@@ -460,17 +470,8 @@ def register(car_no4: str, ticket_type: str = DEFAULT_TICKET, count: int = 1) ->
     print(f"  ✓ 찾음: {in_car.get('carNumber')} / 입차 {in_car.get('basicInfo', {}).get('inDateTime', '?')}")
 
     print(f"[2/2] {spec['label']} × {count} 적용 중...")
-    ok_count = 0
-    for i in range(count):
-        ok, msg = apply_discount(in_car, ticket_type)
-        tag = f"  [{i+1}/{count}]" if count > 1 else "  "
-        print(f"{tag} {'✓' if ok else '✗'} {msg}")
-        if ok:
-            ok_count += 1
-        else:
-            break
-    if count > 1:
-        print(f"  → 총 {ok_count}/{count} 장 등록됨")
+    ok, msg = apply_discount(in_car, ticket_type, count=count)
+    print(f"  {'✓' if ok else '✗'} {msg}")
 
 
 def selftest(car_no4: str, ticket_type: str = DEFAULT_TICKET) -> None:
