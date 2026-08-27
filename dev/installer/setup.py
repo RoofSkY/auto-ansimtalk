@@ -260,14 +260,6 @@ def safe_extract(zip_path: Path, dest: Path) -> Path:
     raise RuntimeError("zip 안에서 server.py 를 찾지 못했습니다")
 
 
-# 소스가 src/ 로 이동하기 전(v1.2.0 이하) 앱 루트에 있던 모듈들 —
-# 덮어쓰기만 하면 루트에 남아 src/ 의 새 코드 대신 임포트될 수 있어 재설치 시 정리한다.
-_LEGACY_ROOT_MODULES = (
-    "ansim.py", "ansim_web.py", "iparking.py", "updater.py", "autostart.py",
-    "npdc.py", "auth.py",
-)
-
-
 def copy_app(root: Path, install_dir: Path) -> None:
     """앱 파일을 설치 폴더로 복사 — 기존 config/, logs/ 는 보존."""
     install_dir.mkdir(parents=True, exist_ok=True)
@@ -281,14 +273,6 @@ def copy_app(root: Path, install_dir: Path) -> None:
         else:
             dst.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(src, dst)
-
-    if (install_dir / "src").is_dir():
-        for name in _LEGACY_ROOT_MODULES:
-            try:
-                (install_dir / name).unlink(missing_ok=True)
-            except OSError:
-                pass
-        shutil.rmtree(install_dir / "__pycache__", ignore_errors=True)
 
 
 # ---------- 3. 패키지 설치 ----------

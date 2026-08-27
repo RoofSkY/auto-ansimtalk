@@ -105,10 +105,6 @@ def load_students() -> list[dict]:
         return []
     needs_save = False
     for s in raw:
-        if "car_no4s" not in s:
-            legacy = s.get("car_no4", "")
-            s["car_no4s"] = [legacy] if legacy else []
-        s.pop("car_no4", None)
         # 액션 API 가 참조하는 안정 식별자 — 이름순 정렬로 위치가 바뀌어도 불변.
         # 구버전 데이터에는 없으므로 최초 로드 시 부여하고 파일에 반영한다.
         if not s.get("id"):
@@ -153,15 +149,6 @@ def load_schedules() -> list[dict]:
     except Exception:
         return []
     for s in raw:
-        if "tickets" not in s:
-            ttype = s.get("ticket_type", "")
-            try:
-                tcount = int(s.get("ticket_count", 1))
-            except Exception:
-                tcount = 1
-            s["tickets"] = {ttype: tcount} if ttype and tcount > 0 else {}
-        s.pop("ticket_type", None)
-        s.pop("ticket_count", None)
         if "days" not in s:
             s["days"] = list(range(5))
         else:
@@ -187,7 +174,7 @@ def save_schedules(schedules: list[dict]) -> None:
         }
         for s in schedules
     ]
-    jsonstore.save(SCHEDULES_PATH, normalized, private=True)  # 원자적 쓰기
+    jsonstore.save(SCHEDULES_PATH, normalized, private=True)
 
 
 def load_config() -> dict:
@@ -198,23 +185,13 @@ def load_config() -> dict:
             raw = json.load(f)
     except Exception:
         return dict(DEFAULT_CONFIG)
-    # 구버전 마이그레이션: 나눠져 있던 두 갱신 주기를 하나로 통합
-    if "refresh_interval" not in raw:
-        legacy = raw.get("att_sync_interval") or raw.get("auto_search_interval")
-        if legacy:
-            try:
-                raw["refresh_interval"] = max(10, int(legacy))
-            except Exception:
-                pass
-    raw.pop("att_sync_interval", None)
-    raw.pop("auto_search_interval", None)
     return {**DEFAULT_CONFIG, **raw}
 
 
 def save_config(cfg: dict) -> None:
     try:
         # github_token 이 들어갈 수 있어 권한도 제한한다
-        jsonstore.save(CONFIG_PATH, cfg, private=True)  # 원자적 쓰기 — 중단 시 파일 절단 방지
+        jsonstore.save(CONFIG_PATH, cfg, private=True)
     except Exception as e:
         print(f"config 저장 실패: {e}", file=sys.stderr)
 
@@ -482,20 +459,22 @@ def do_vehicle(student: dict, tickets: dict[str, int] | None = None,
         for ttype, count in tickets.items():
             ticket = iparking.TICKETS[ttype]
             try:
-                ok_count = 0
-                last_msg = ""
-                for _ in range(count):
-                    ok, msg = iparking.apply_discount(in_car, ttype)
-                    last_msg = msg
-                    if ok:
+                ok, msg = iparking.apply_discount(in_car, ttype, count=count)
+                ok_count = count if ok else 0
+                if not ok and count > 1:
+                    # 벌크가 거부되면 1장씩 폴백 — 잔여가 요청보다 적은 경우 등
+                    # 넣을 수 있는 만큼은 넣고 몇 장에서 막혔는지 남긴다
+                    for _ in range(count):
+                        ok1, msg = iparking.apply_discount(in_car, ttype)
+                        if not ok1:
+                            break
                         ok_count += 1
-                    else:
-                        break
+                    ok = ok_count == count
                 if count > 1:
-                    summary = f"{ticket['label']} {ok_count}/{count}매 - {last_msg}"
+                    summary = f"{ticket['label']} {ok_count}/{count}매 - {msg}"
                 else:
-                    summary = f"{ticket['label']} - {last_msg}"
-                emit_log(tag, car_target, summary, ok_count == count)
+                    summary = f"{ticket['label']} - {msg}"
+                emit_log(tag, car_target, summary, ok)
             except Exception as e:
                 emit_log(tag, car_target, f"{ticket['label']} 오류: {e}", False)
 
@@ -843,7 +822,9 @@ def _parse_schedule_form(form) -> dict:
         if n < 0:
             return {"error": "매수는 0 이상"}
         if n > 0:
-            tickets[ttype] = n
+            # 권종의 최대 적용 매수를 넘으면 잘라낸다 — 넘긴 채 두면 예약 실행 때
+            # 초과분부터 등록이 실패해 "k/N매" 부분 성공 로그만 남는다
+            tickets[ttype] = min(n, iparking.TICKETS[ttype]["max"])
 
     if car and not tickets:
         return {"error": "차량번호 입력 시 매수 최소 1 필요"}
@@ -915,7 +896,7 @@ def _static_version() -> str:
 
 
 templates.env.globals["app_version"] = __version__
-templates.env.globals["static_version"] = _static_version()  # 정적 자원 캐시 버스팅용
+templates.env.globals["static_version"] = _static_version()
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 
@@ -1202,7 +1183,6 @@ async def update_settings(request: Request):
     raw = form.get("vehicle_ticket_count")
     if raw:
         try:
-            # 할인권 자체의 최대 적용 매수를 넘지 않도록 제한
             limit = iparking.TICKETS[DEFAULT_VEHICLE_TICKET]["max"]
             state.config["vehicle_ticket_count"] = min(limit, max(1, int(raw)))
         except (ValueError, KeyError):

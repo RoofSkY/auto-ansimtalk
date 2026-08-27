@@ -10,19 +10,14 @@ CLI:
     python ansim.py --setup    # 설정 파일 안내
 """
 
-import json
 import re
 import sys
 from datetime import datetime
 from pathlib import Path
 
-import jsonstore
+import requests
 
-try:
-    import requests
-except ImportError:
-    print("requests 패키지가 필요합니다: pip install requests")
-    sys.exit(1)
+import jsonstore
 
 
 BASE_URL = "http://agent-ansimtalk.gg.go.kr"
@@ -58,29 +53,6 @@ _BASE = (
 _CONFIG_DIR = _BASE / "config"
 _CONFIG_DIR.mkdir(exist_ok=True)
 ANSIM_CONFIG_PATH = _CONFIG_DIR / "ansimtalk.json"  # 자격증명 + 세션(session 키) 통합
-
-# 구버전 분리 파일(ansim_config.json + ansim_session.json, 루트 위치 세션 포함)을 통합 파일로 이관
-if not ANSIM_CONFIG_PATH.exists():
-    _legacy_cfg = _CONFIG_DIR / "ansim_config.json"
-    _legacy_sess = _CONFIG_DIR / "ansim_session.json"
-    _legacy_root_sess = _BASE / "ansim_session.json"
-    try:
-        _merged: dict = {}
-        if _legacy_cfg.exists():
-            with open(_legacy_cfg, encoding="utf-8") as f:
-                _merged.update(json.load(f))
-        _sess_src = _legacy_sess if _legacy_sess.exists() else (
-            _legacy_root_sess if _legacy_root_sess.exists() else None)
-        if _sess_src is not None:
-            with open(_sess_src, encoding="utf-8") as f:
-                _merged["session"] = json.load(f)
-        if _merged:
-            jsonstore.save(ANSIM_CONFIG_PATH, _merged, private=True)
-            _legacy_cfg.unlink(missing_ok=True)
-            _legacy_sess.unlink(missing_ok=True)
-            _legacy_root_sess.unlink(missing_ok=True)
-    except Exception:
-        pass
 
 # 마지막 register() 호출의 상세 메시지 (외부에서 읽기용)
 LAST_MESSAGE: str = ""

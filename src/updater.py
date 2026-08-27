@@ -222,25 +222,6 @@ def safe_extract(zip_path: Path, dest: Path) -> Path:
     raise RuntimeError("zip 안에서 server.py 를 찾지 못했습니다")
 
 
-# 소스가 src/ 로 이동하기 전(v1.2.0 이하) 앱 루트에 있던 모듈들.
-# 덮어쓰기만 하면 루트에 그대로 남아 src/ 의 새 코드 대신 임포트될 수 있어 정리한다.
-_LEGACY_ROOT_MODULES = (
-    "ansim.py", "ansim_web.py", "iparking.py", "updater.py", "autostart.py",
-    "npdc.py", "auth.py",
-)
-
-
-def _remove_legacy_root_modules(install_dir: Path) -> None:
-    if not (install_dir / "src").is_dir():
-        return  # 새 구조가 아니면 건드리지 않음
-    for name in _LEGACY_ROOT_MODULES:
-        try:
-            (install_dir / name).unlink(missing_ok=True)
-        except OSError:
-            pass
-    shutil.rmtree(install_dir / "__pycache__", ignore_errors=True)
-
-
 def apply_release(root: Path, install_dir: Path | None = None) -> None:
     """압축 해제된 릴리스(root)를 설치 폴더에 덮어쓰기. config/, logs/ 는 보존."""
     install_dir = (install_dir or HERE).resolve()
@@ -254,7 +235,6 @@ def apply_release(root: Path, install_dir: Path | None = None) -> None:
         else:
             dst.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(src, dst)
-    _remove_legacy_root_modules(install_dir)
 
 
 def _pip_install_requirements(install_dir: Path, log_file) -> None:
