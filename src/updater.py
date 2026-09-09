@@ -27,7 +27,7 @@ from version import __version__, APP_NAME, GITHUB_REPO
 HERE = (
     Path(sys.executable).resolve().parent
     if getattr(sys, "frozen", False)
-    else Path(__file__).resolve().parent.parent  # src/ → 앱 루트
+    else Path(__file__).resolve().parent.parent
 )
 CONFIG_DIR = HERE / "config"
 LOGS_DIR = HERE / "logs"

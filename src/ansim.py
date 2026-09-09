@@ -39,7 +39,6 @@ _FIXED_PARAMS = {
     "re_time": "20",
 }
 
-# program / customer_id 는 로그인 직후 member_list.asp 로 자동 조회 — 설정에 없음
 DEFAULT_CONFIG = {
     "user_id": "",
     "password": "",
@@ -48,13 +47,12 @@ DEFAULT_CONFIG = {
 _BASE = (
     Path(sys.executable).resolve().parent
     if getattr(sys, "frozen", False)
-    else Path(__file__).resolve().parent.parent  # src/ → 앱 루트
+    else Path(__file__).resolve().parent.parent
 )
 _CONFIG_DIR = _BASE / "config"
 _CONFIG_DIR.mkdir(exist_ok=True)
-ANSIM_CONFIG_PATH = _CONFIG_DIR / "ansimtalk.json"  # 자격증명 + 세션(session 키) 통합
+ANSIM_CONFIG_PATH = _CONFIG_DIR / "ansimtalk.json"
 
-# 마지막 register() 호출의 상세 메시지 (외부에서 읽기용)
 LAST_MESSAGE: str = ""
 
 _session: requests.Session | None = None
@@ -63,7 +61,7 @@ _config: dict | None = None
 
 def _load_config() -> dict:
     data = jsonstore.load(ANSIM_CONFIG_PATH)
-    data.pop("session", None)  # 세션은 _config 와 분리 관리
+    data.pop("session", None)
     return {**DEFAULT_CONFIG, **data}
 
 

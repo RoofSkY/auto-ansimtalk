@@ -41,7 +41,7 @@ except ImportError:
 
 
 # ---------- 경로 ----------
-HERE = Path(__file__).resolve().parent.parent  # src/ → 앱 루트
+HERE = Path(__file__).resolve().parent.parent
 CONFIG_DIR = HERE / "config"
 CONFIG_DIR.mkdir(exist_ok=True)
 STUDENTS_PATH = CONFIG_DIR / "students.json"
@@ -59,6 +59,7 @@ SOUND_DIR = HERE / "sound"
 DEFAULT_CONFIG = {
     "auto_search": True,
     "vehicle_toast": True,
+    "vehicle_windows_notify": True,  # False: 웹 알림, True: Windows 알림
     "vehicle_toast_duration": 5,
     "att_sync": True,
     "vehicle_ticket_count": 1,  # 차량등록 버튼이 등록할 1시간 무료권 매수
@@ -236,7 +237,6 @@ class State:
         # 원생별 등원/하원 로그 기록 여부 — None 이면 다음 동기화 때 당일 로그에서 복원
         self.att_logged: dict[str, dict[str, bool]] | None = None
 
-        # 수동/액션 트리거로 갱신 루프를 즉시 깨우는 이벤트.
         # wake_tasks 로 이번 수동 갱신에서 실행할 작업을 지정 ("att" / "vehicle")
         self.refresh_wake = threading.Event()
         self.wake_tasks: set[str] = set()
@@ -244,6 +244,7 @@ class State:
 
         self.sse_subscribers: list[asyncio.Queue] = []
         self.main_loop: asyncio.AbstractEventLoop | None = None
+        self.tray_icon = None  # visible 이후에만 게시: 초기화 중 알림 호출 방지
 
 
 state = State()
@@ -335,10 +336,20 @@ def _play_sound(filename: str) -> None:
         pass
 
 
-# ---------- 입출차 토스트 (브라우저 SSE) ----------
+# ---------- 입출차 알림 (Windows 기본 알림, 트레이 미지원 시 웹 알림) ----------
 def _notify_vehicle(kind: str, name: str, car: str) -> None:
     if not state.config.get("vehicle_toast", True):
         return
+    icon = state.tray_icon
+    if (state.config.get("vehicle_windows_notify", True)
+            and sys.platform == "win32" and icon is not None):
+        try:
+            # 기본 알림음과 표시 시간은 Windows 설정을 따른다.
+            message = f"{name} · {car}" if name else car
+            icon.notify(message[:200], f"등하원차량등록 · {kind}")
+            return
+        except Exception as e:
+            emit_log("시스템", "입출차 알림", f"Windows 알림 실패 — 웹 알림으로 표시: {e}", False)
     duration_ms = max(1, int(state.config.get("vehicle_toast_duration", 5))) * 1000
     emit_event("vehicle_notify", {
         "kind": kind, "name": name, "car": car,
@@ -412,7 +423,6 @@ def _vehicle_ticket_count() -> int:
 def do_vehicle(student: dict, tickets: dict[str, int] | None = None,
                tag: str = "차량등록") -> None:
     if tickets is None:
-        # 설정에서 정한 매수만큼 등록 (예약은 자체 매수를 넘겨받으므로 여기 오지 않음)
         tickets = {DEFAULT_VEHICLE_TICKET: _vehicle_ticket_count()}
     name = student.get("name", "")
 
@@ -519,7 +529,6 @@ def _log_loop_error(what: str, e: Exception) -> None:
 
 def _refresh_tick(manual_tasks: set[str] | None) -> set[str] | None:
     """한 주기 실행 후, 다음 주기에 쓸 manual_tasks 를 반환."""
-    # 등하원 동기화를 먼저 — 빠르게 끝나서 배지가 즉시 갱신됨
     if (manual_tasks is not None and "att" in manual_tasks) or \
             (manual_tasks is None and state.config.get("att_sync", True)):
         try:
@@ -540,7 +549,6 @@ def _refresh_tick(manual_tasks: set[str] | None) -> set[str] | None:
         interval = 60
     # 범위 지정 수동 갱신(상태 탭 클릭·등하원처리 후)은 주기 카운트다운을 건드리지
     # 않는다 — 리셋하면 탭을 자주 누를수록 주기 갱신(차량 검색 포함)이 계속 밀린다.
-    # 전체 수동 갱신(새로고침 버튼)과 주기 도래는 지금까지처럼 카운트다운을 재시작.
     partial = manual_tasks is not None and manual_tasks < {"att", "vehicle"}
     if partial:
         remaining = state.next_refresh_ts - time.time()
@@ -667,7 +675,6 @@ def _poll_once():
 
     # 이번에 확인된 차량은 다음 주기부터 판정 대상. 등록이 사라진 차량은 정리.
     state.poll_baseline = (state.poll_baseline | observed) & tracked
-    # 조회 실패한 차량은 직전 상태를 그대로 유지 — 판정 보류
     state.prev_in_cars = current | (state.prev_in_cars & unknown)
     emit_event("in_cars", {"cars": list(state.prev_in_cars)})
 
@@ -922,7 +929,6 @@ async def _local_only_guard(request: Request, call_next):
       크로스오리진 폼 제출은 브라우저가 Origin 을 반드시 붙인다.
       Origin 이 아예 없는 요청(curl 등 비브라우저)은 CSRF 가 성립하지 않아 허용한다.
     """
-    # 호스트명은 대소문자를 구분하지 않는다 (LOCALHOST 도 정상 요청)
     host = (request.headers.get("host") or "").rsplit(":", 1)[0].strip("[]").lower()
     if host and host not in _ALLOWED_HOSTS:
         return JSONResponse({"error": "invalid host"}, status_code=421)
@@ -1174,6 +1180,7 @@ async def update_settings(request: Request):
     form = await request.form()
     state.config["auto_search"] = form.get("auto_search") == "on"
     state.config["vehicle_toast"] = form.get("vehicle_toast") == "on"
+    state.config["vehicle_windows_notify"] = form.get("vehicle_windows_notify") == "on"
     state.config["att_sync"] = form.get("att_sync") == "on"
     raw = form.get("vehicle_toast_duration")
     if raw:
@@ -1196,6 +1203,25 @@ async def update_settings(request: Request):
             pass
     save_config(state.config)
     return _settings_saved("설정")
+
+
+@app.post("/api/settings/notifications/test")
+async def test_windows_notification():
+    """설정 저장이나 실제 차량 처리 없이 Windows 알림만 테스트."""
+    icon = state.tray_icon
+    if sys.platform != "win32" or icon is None:
+        return JSONResponse(
+            {"error": "Windows 트레이가 준비되지 않았습니다. start.bat으로 앱을 실행해 주세요."},
+            status_code=503,
+        )
+    try:
+        await asyncio.to_thread(
+            icon.notify, "테스트 알림입니다. 알림 배너와 소리를 확인해 주세요.",
+            "등하원차량등록 · Windows 알림 테스트",
+        )
+    except Exception:
+        return JSONResponse({"error": "Windows 알림 요청에 실패했습니다."}, status_code=500)
+    return {"ok": True}
 
 
 @app.post("/api/settings/autostart")
@@ -1226,7 +1252,6 @@ async def update_ansim_account(user_id: str = Form(""), password: str = Form("")
         jsonstore.update, ansim.ANSIM_CONFIG_PATH, _mutate, private=True)
 
     def _reset() -> None:
-        # 이전 계정의 세션이 남지 않도록 초기화 후 즉시 동기화로 검증
         ansim.reset_session()
         ansim_web.reset_session()
         _trigger_refresh("att")
@@ -1288,7 +1313,6 @@ async def update_iparking_account(store_id: str = Form(""), user_id: str = Form(
         jsonstore.update, iparking.CONFIG_PATH, _mutate, private=True)
 
     def _verify() -> None:
-        # 이전 계정의 세션이 남지 않도록 초기화 후, 새 계정으로 즉시 재로그인해 검증
         iparking.reset_session()
         try:
             iparking.relogin()
@@ -1386,12 +1410,20 @@ def _run_tray():
     def on_open(_icon, _item):
         _open_browser()
 
+    def on_test(_icon, _item):
+        _notify_vehicle("입차", "알림 테스트", "테스트 차량")
+
+    def on_ready(icon):
+        icon.visible = True
+        state.tray_icon = icon
+
     def on_quit(icon, _item):
         # 브라우저들이 종료 화면을 그리도록 먼저 알리고, 이벤트가 SSE 로
         # 나갈 시간을 준 뒤 정리한다. icon.stop() 을 건너뛰고 죽으면
         # 트레이에 유령 아이콘이 남는다.
         emit_event("server_shutdown", {})
         time.sleep(0.5)
+        state.tray_icon = None
         icon.stop()
         os._exit(0)
 
@@ -1401,10 +1433,14 @@ def _run_tray():
         "auto-ansimtalk 서버 실행 중",
         menu=Menu(
             MenuItem("웹 페이지 열기", on_open, default=True),
+            MenuItem("입출차 알림 테스트", on_test),
             MenuItem("종료", on_quit),
         ),
     )
-    icon.run()
+    try:
+        icon.run(setup=on_ready)
+    finally:
+        state.tray_icon = None
 
 
 def _run_server():
@@ -1440,7 +1476,6 @@ def main():
     except Exception as e:
         # 트레이 실패로 프로세스가 끝나면 데몬 스레드인 서버까지 함께 죽어
         # 앱이 "잠깐 떴다 사라짐" 으로 보인다. 서버는 계속 살려 둔다.
-        # (pystray/pillow 설치 손상, 트레이가 없는 세션 등)
         msg = f"트레이 아이콘을 띄우지 못했습니다 — 서버는 계속 실행됩니다: {e}"
         print(msg, file=sys.stderr)
         try:

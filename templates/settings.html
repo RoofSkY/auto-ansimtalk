@@ -17,7 +17,7 @@
 
     <form action="/api/settings" method="post" class="space-y-5">
         <label class="flex items-center justify-between cursor-pointer">
-            <span>입출차 토스트 알림</span>
+            <span>입출차 알림</span>
             <span class="relative inline-block h-7 w-14 shrink-0">
                 <input type="checkbox" name="vehicle_toast" class="peer sr-only"
                        {% if config.vehicle_toast %}checked{% endif %}>
@@ -26,8 +26,27 @@
             </span>
         </label>
 
+        <label class="flex items-center justify-between cursor-pointer">
+            <span>알림 방식</span>
+            <span class="flex gap-2 items-center">
+                <span class="text-sm">웹</span>
+                <span class="relative inline-block h-7 w-14 shrink-0">
+                    <input type="checkbox" name="vehicle_windows_notify" class="peer sr-only"
+                           role="switch" aria-label="Windows 알림 사용 (끄면 웹 알림)"
+                           {% if config.vehicle_windows_notify %}checked{% endif %}>
+                    <span class="absolute inset-0 rounded-full bg-gray-300 dark:bg-gray-600 peer-checked:bg-blue-600 transition-colors"></span>
+                    <span class="absolute left-1 top-1 h-5 w-5 rounded-full bg-white shadow transition-transform peer-checked:translate-x-7"></span>
+                </span>
+                <span class="text-sm">Windows</span>
+            </span>
+        </label>
+
         <div>
-            <label class="block text-sm text-gray-500 dark:text-gray-400 mb-1">토스트 표시 시간 (초, 최소 1)</label>
+            <button type="button" onclick="testWindowsNotification(this)"
+                    class="px-4 py-1.5 bg-blue-500 hover:bg-blue-600 text-white rounded text-sm">Windows 알림 테스트</button>
+            <p id="notification-test-status" role="status" aria-live="polite"
+               class="text-sm text-gray-500 dark:text-gray-400 mb-1"></p>
+            <label class="block text-sm text-gray-500 dark:text-gray-400 mb-1">웹 알림 표시 시간 (초, 최소 1)</label>
             <div class="flex gap-2 items-center">
                 <input name="vehicle_toast_duration" type="number"
                        value="{{ config.vehicle_toast_duration }}" min="1"
@@ -167,7 +186,6 @@
     </div>
 </div>
 
-<!-- 저장 완료 알림 — 폼 제출은 리다이렉트뿐이라 표시가 없으면 저장 여부를 알 수 없다 -->
 <div id="save-toast"
      class="hidden fixed top-20 left-1/2 -translate-x-1/2 z-50 px-6 py-3 rounded-lg shadow-lg
             bg-green-600 text-white text-sm font-semibold
@@ -220,9 +238,24 @@ function showSaved(text, ok = true) {
     const what = new URLSearchParams(location.search).get('saved');
     if (!what) return;
     showSaved(`${what} 저장 완료`);
-    // 새로고침하면 알림이 다시 뜨지 않도록 주소만 정리
     history.replaceState(null, '', location.pathname);
 })();
+
+async function testWindowsNotification(btn) {
+    const status = document.getElementById('notification-test-status');
+    btn.disabled = true;
+    status.textContent = '테스트 알림 요청 중...';
+    try {
+        const r = await fetch('/api/settings/notifications/test', { method: 'POST' });
+        const result = await r.json();
+        if (!r.ok) throw new Error(result.error || '알림 요청 실패');
+        status.textContent = '';
+    } catch (e) {
+        status.textContent = '테스트 실패: ' + e.message;
+    } finally {
+        btn.disabled = false;
+    }
+}
 
 async function toggleAutostart(el) {
     try {
@@ -273,7 +306,6 @@ async function checkUpdate() {
 }
 
 function waitForRestart(status) {
-    // 서버가 내려갔다가(sawDown) 다시 /health 가 살아나면 새 버전 페이지로 리로드
     let tries = 0, sawDown = false;
     const timer = setInterval(async () => {
         tries++;

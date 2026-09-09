@@ -17,14 +17,13 @@ _LEGACY_NAMES = ("AutoAnsimTalk",)  # 구버전 등록 이름
 HERE = (
     Path(sys.executable).resolve().parent
     if getattr(sys, "frozen", False)
-    else Path(__file__).resolve().parent.parent  # src/ → 앱 루트
+    else Path(__file__).resolve().parent.parent
 )
 
 
 def _command() -> str:
     pythonw = Path(sys.executable).with_name("pythonw.exe")
     exe = pythonw if pythonw.exists() else Path(sys.executable)
-    # 부팅 시에는 브라우저 자동 열기 없이 조용히 시작
     return f'"{exe}" "{HERE / "server.py"}" --no-browser'
 
 

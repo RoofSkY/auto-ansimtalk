@@ -18,7 +18,7 @@ import requests
 
 BASE_URL = "https://ansimtalk.gg.go.kr"
 
-HERE = Path(__file__).resolve().parent.parent  # src/ → 앱 루트
+HERE = Path(__file__).resolve().parent.parent
 ANSIM_CONFIG_PATH = HERE / "config" / "ansimtalk.json"
 
 STATE_LABELS = {
@@ -77,7 +77,6 @@ def _login() -> requests.Session:
         timeout=15,
     )
     res.raise_for_status()
-    # 성공 시 attendance.asp 로 보내는 스크립트가 응답됨
     if "attendance.asp" not in res.text:
         raise RuntimeError(f"웹 포털 로그인 실패 (id/pw 확인): {res.text[:200]!r}")
     return s
@@ -110,7 +109,7 @@ def _fetch(session: requests.Session, day: str) -> list[dict]:
             out_time = ""
         label = STATE_LABELS.get(state, f"미상({state})")
         # 서버는 하원해도 ATTENDANCE_STATE 를 "1" 로 유지하고 EDATE 만 채움 —
-        # 하원 여부는 하원시간 존재로 판정 (2026-07-20 실데이터로 확인)
+        # 하원 여부는 하원시간 존재로 판정
         if state == "1" and out_time:
             label = "하원"
         out.append({

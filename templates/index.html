@@ -95,7 +95,6 @@
 </div>
 
 <script>
-// ---------- 초성 검색 ----------
 const CHOSUNG = "ㄱㄲㄴㄷㄸㄹㅁㅂㅃㅅㅆㅇㅈㅉㅊㅋㅌㅍㅎ";
 const CHOSUNG_SET = new Set(CHOSUNG);
 
@@ -164,7 +163,6 @@ function mainApp() {
         },
 
         connectSSE() {
-            // 연결은 base.html 의 공용 버스가 하나만 유지한다 (브라우저 연결 한도 절약)
             window.sseBus.on((msg) => {
                 if (msg.type === 'log') {
                     // 시간순 위치에 삽입 — 과거 시각의 보정 로그가 맨 아래에 붙지 않도록
@@ -299,7 +297,6 @@ function mainApp() {
             btn.classList.add('opacity-50');
             try {
                 await fetch(`/api/students/${sid}/${action}`, { method: 'POST' });
-                // 등하원처리만 완료 후 서버가 즉시 갱신 → refreshed 로 리셋 (차량등록은 갱신 없음)
                 if (action === 'attendance') this.refreshRemaining = 0;
             } finally {
                 setTimeout(() => {
