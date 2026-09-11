@@ -147,35 +147,22 @@
 			<div class="log-filters" aria-label="기록 종류 필터">
 				<template x-for="tab in logTabs" :key="tab.key"
 					><button
-						@click="currentTab = tab.key"
+						@click="selectLogTab(tab.key)"
 						class="log-tab"
 						:class="{ active: currentTab === tab.key }"
 						:aria-pressed="currentTab === tab.key"
 						x-text="tab.label"></button
 				></template>
 			</div>
-			<div class="log-list" x-ref="logBox" @scroll="onLogScroll">
-				<template x-for="(log, i) in filteredLogs" :key="i">
-					<article class="log-entry">
-						<time class="log-time" x-text="log.time"></time>
-						<span
-							class="log-status"
-							role="img"
-							:aria-label="logIcon(log)" :title="logIcon(log)">
-							<svg x-show="logIcon(log) === '입차'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+<svg width="0" height="0" style="position:absolute" aria-hidden="true"><symbol id="log-icon-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
 								<path d="M5 4h14m-3-3 3 3-3 3M4 14l2-5h12l2 5v6H4zM4 14h16M6 20v2m12-2v2M7 17h1m8 0h1"/>
-							</svg>
-							<svg x-show="logIcon(log) === '출차'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+							</symbol><symbol id="log-icon-1" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
 								<path d="M19 4H5m3-3L5 4l3 3M4 14l2-5h12l2 5v6H4zM4 14h16M6 20v2m12-2v2M7 17h1m8 0h1"/>
-							</svg>
-							<svg x-show="logIcon(log) === '등원'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+							</symbol><symbol id="log-icon-2" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
 								<path d="M11 3h8v18h-8M3 12h12m-4-4 4 4-4 4"/>
-							</svg>
-							<svg x-show="logIcon(log) === '하원'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+							</symbol><symbol id="log-icon-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
 								<path d="M11 3H3v18h8M9 12h12m-4-4 4 4-4 4"/>
-							</svg>
-							<svg
-								x-show="logIcon(log) === '성공'"
+							</symbol><symbol id="log-icon-4"
 								class="log-success"
 								viewBox="0 0 24 24"
 								aria-hidden="true">
@@ -191,9 +178,7 @@
 									stroke-width="2"
 									stroke-linecap="round"
 									stroke-linejoin="round" />
-							</svg>
-							<svg
-								x-show="logIcon(log) === '실패'"
+							</symbol><symbol id="log-icon-5"
 								class="log-failure"
 								viewBox="0 0 24 24"
 								aria-hidden="true">
@@ -206,17 +191,35 @@
 									stroke-width="2"
 									stroke-linecap="round" />
 								<circle cx="12" cy="18" r="1.2" fill="white" />
-							</svg>
+							</symbol></svg>
+			<div class="log-list" x-ref="logBox" @scroll="onLogScroll">
+                <button class="btn" x-cloak x-show="hasMoreLogs || logsLoading"
+                    :disabled="logsLoading" @click="loadLogs(true)"
+                    x-text="logsLoading ? '기록 불러오는 중…' : '이전 기록 500건 더 보기'"></button>
+                <p class="feedback-error" x-cloak x-show="logsError" x-text="logsError"></p>
+                <button class="btn" x-cloak x-show="logsError && !logsLoading"
+                    @click="loadLogs(logs.length > 0)">다시 불러오기</button>
+				<template x-for="log in filteredLogs" :key="log.id">
+					<article class="log-entry">
+						<time class="log-time" x-text="log.time"></time>
+						<span
+							class="log-status"
+							role="img"
+							:aria-label="log.icon" :title="log.icon">
+                            <svg viewBox="0 0 24 24" aria-hidden="true"
+                                :class="{ 'log-success': log.iconIndex === 4, 'log-failure': log.iconIndex === 5 }">
+                                <use :href="'#log-icon-' + log.iconIndex"></use>
+                            </svg>
 						</span>
-						<div class="log-summary" :title="log.time + ' · ' + logTarget(log) + ' · ' + logType(log) + ' · ' + log.message">
+						<div class="log-summary" :title="log.time + ' · ' + log.displayTarget + ' · ' + log.displayType + ' · ' + log.message">
 							<span
 								class="log-target"
-								x-text="logTarget(log)"></span>
+								x-text="log.displayTarget"></span>
 							<span aria-hidden="true"> · </span>
 							<span
 								class="log-message"
 								:class="{ 'feedback-error': !log.ok }"
-								x-text="logType(log) + ' · ' + log.message"></span>
+								x-text="log.displayType + ' · ' + log.message"></span>
 						</div>
 					</article>
 				</template>
@@ -273,6 +276,14 @@
 	    return {
 	        students: {{ students | tojson }},
 	        logs: {{ logs | tojson }},
+            hasMoreLogs: {{ logs_has_more | default(false) | tojson }},
+            logsDate: {{ logs_date | default('') | tojson }},
+            logsLoading: false,
+            logsError: '',
+            logLimit: 500,
+            logGeneration: 0,
+            pendingLogs: [],
+            logFrame: null,
 	        inCars: new Set({{ in_cars | tojson }}),
 	        attStatus: {{ att_status | tojson }},
 	        attTimes: {{ att_times | tojson }},
@@ -303,7 +314,7 @@
 
 	        init() {
 	            // 보정 로그(실제 등하원 시각)가 파일에 늦게 추가돼도 표시는 시간순 유지
-	            this.logs.sort((a, b) => (a.time || '').localeCompare(b.time || ''));
+	            this.logs = this.logs.map(log => this.prepareLog(log)).sort((a, b) => this.compareLogs(a, b));
 	            this.connectSSE();
 	            this.$nextTick(() => this.scrollToBottom(true));
 	            this.countdownTimer = setInterval(() => {
@@ -320,6 +331,7 @@
 	        destroy() {
 	            clearInterval(this.actionTimer);
 	            clearInterval(this.countdownTimer);
+                cancelAnimationFrame(this.logFrame);
 	        },
 
 	        connectSSE() {
@@ -328,17 +340,11 @@
 	                    this.applyActions(msg.data);
 	                } else if (msg.type === 'log') {
 	                    // 시간순 위치에 삽입 — 과거 시각의 보정 로그가 맨 아래에 붙지 않도록
-	                    const t = msg.data.time || '';
-	                    let i = this.logs.length;
-	                    while (i > 0 && (this.logs[i - 1].time || '') > t) i--;
-	                    this.logs.splice(i, 0, msg.data);
-	                    if (this.autoScroll) {
-	                        this.$nextTick(() => this.scrollToBottom(false));
-	                    }
-	                } else if (msg.type === 'students_changed') {
+	                    this.enqueueLog(msg.data);
+                } else if (msg.type === 'students_changed') {
 	                    fetch('/api/students/list')
 	                        .then(r => r.json())
-	                        .then(d => { this.students = d.students || []; })
+	                        .then(d => { this.students = d.students || []; this.logs = this.logs.map(log => this.prepareLog(log)); })
 	                        .catch(() => {});
 	                } else if (msg.type === 'in_cars') {
 	                    this.inCars = new Set(msg.data.cars);
@@ -358,7 +364,7 @@
 	                    this.attTimes = {};
 	                    // 로그 정렬 키가 "HH:MM:SS" 뿐이라 자정을 넘기면 새 로그가
 	                    // 전날 항목보다 앞서 맨 위에 박힌다 — 날짜가 바뀌면 비운다
-	                    this.logs = [];
+	                    this.resetLogs();
 	                }
 	            });
 	            window.sseBus.start();
@@ -387,6 +393,98 @@
 	        keyOf(s) {
 	            return (s.code || '').trim() || (s.name || '').trim();
 	        },
+
+            prepareLog(log) {
+                const icon = this.logIcon(log);
+                return { ...log, id: log.id || crypto.randomUUID(), icon,
+                    iconIndex: ['입차', '출차', '등원', '하원', '성공', '실패'].indexOf(icon),
+                    displayTarget: this.logTarget(log), displayType: this.logType(log) };
+            },
+
+            compareLogs(a, b) {
+                const first = a.time || '', second = b.time || '';
+                return first < second ? -1 : first > second ? 1 : a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+            },
+
+            mergeLogs(entries) {
+                const tab = this.logTabs.find(tab => tab.key === this.currentTab);
+                const merged = new Map(this.logs.map(log => [log.id, log]));
+                entries.forEach(entry => {
+                    if (!tab || tab.match(entry)) {
+                        const log = this.prepareLog(entry);
+                        merged.set(log.id, log);
+                    }
+                });
+                const sorted = [...merged.values()].sort((a, b) => this.compareLogs(a, b));
+                if (sorted.length > this.logLimit) this.hasMoreLogs = true;
+                this.logs = sorted.slice(-this.logLimit);
+            },
+
+            enqueueLog(log) {
+                if (log.date && this.logsDate && log.date < this.logsDate) return;
+                if (log.date && log.date !== this.logsDate) this.resetLogs(log.date);
+                this.pendingLogs.push(log);
+                if (this.logFrame !== null) return;
+                this.logFrame = requestAnimationFrame(() => {
+                    this.logFrame = null;
+                    const follow = this.autoScroll;
+                    this.mergeLogs(this.pendingLogs.splice(0));
+                    if (follow) this.$nextTick(() => this.scrollToBottom(false));
+                });
+            },
+
+            resetLogs(day = '') {
+                this.logGeneration++;
+                this.logs = [];
+                this.pendingLogs = [];
+                this.logsDate = day;
+                this.logLimit = 500;
+                this.hasMoreLogs = false;
+                this.logsLoading = false;
+                this.logsError = '';
+            },
+
+            selectLogTab(kind) {
+                if (this.currentTab === kind) return;
+                this.currentTab = kind;
+                this.resetLogs(this.logsDate);
+                this.loadLogs(false);
+            },
+
+            async loadLogs(more = false) {
+                if (this.logsLoading) return;
+                this.mergeLogs(this.pendingLogs.splice(0));
+                const generation = this.logGeneration;
+                const box = this.$refs.logBox;
+                const height = box?.scrollHeight || 0, top = box?.scrollTop || 0;
+                const query = new URLSearchParams({ kind: this.currentTab, day: this.logsDate });
+                if (more && this.logs.length) query.set('before', JSON.stringify([this.logs[0].time, this.logs[0].id]));
+                this.logsLoading = true;
+                this.logsError = '';
+                try {
+                    const response = await fetch('/api/logs?' + query);
+                    if (!response.ok) throw new Error();
+                    const result = await response.json();
+                    if (generation !== this.logGeneration) return;
+                    if (this.logsDate && result.date !== this.logsDate) this.resetLogs(result.date);
+                    this.logsDate = result.date;
+                    if (more) this.logLimit += 500;
+                    this.hasMoreLogs = result.has_more;
+                    this.mergeLogs(result.logs);
+                    this.mergeLogs(this.pendingLogs.splice(0));
+                    this.logsLoading = false;
+                    this.$nextTick(() => {
+                        if (more && box) {
+                            box.scrollTop = top + box.scrollHeight - height;
+                            this.autoScroll = false;
+                        } else this.scrollToBottom(true);
+                    });
+                } catch (error) {
+                    if (generation === this.logGeneration) this.logsError = '기록을 불러오지 못했습니다. 다시 눌러 주세요.';
+                } finally {
+                    if (generation === this.logGeneration) this.logsLoading = false;
+                }
+            },
 
 	        logIcon(log) {
 	            if (!log.ok) return '실패';
@@ -504,7 +602,7 @@
 	            // 상태 필터 탭 클릭 시 등하원 상태만 즉시 갱신 — 최신 상태로 분류되도록.
 	            // 연타해도 서버의 wake 이벤트가 진행 중 갱신 1회로 합쳐 준다.
 	            try {
-	                await fetch('/api/refresh?scope=att', { method: 'POST' });
+	                await fetch('/api/refresh?scope=att&if_stale=true', { method: 'POST' });
 	            } catch (e) {}
 	        },
 

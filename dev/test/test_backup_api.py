@@ -212,6 +212,102 @@ class BackupApiTests(unittest.TestCase):
         self.assertEqual(self.request("/api/backup/export", method="POST", headers={"Origin": "https://example.com"})[0], 403)
         self.assertEqual(self.request("/api/backup/automatic/invalid.json")[0], 404)
 
+    def test_slow_settings_save_does_not_block_health_and_failed_save_keeps_state(self):
+        entered, release = threading.Event(), threading.Event()
+        results = []
+        original = copy.deepcopy(self.m.state.config)
+
+        def slow_save(config):
+            entered.set()
+            release.wait(3)
+            raise OSError('expected test failure')
+
+        with patch.object(self.m, 'save_config', side_effect=slow_save):
+            thread = threading.Thread(target=lambda: results.append(self.request(
+                '/api/settings', b'refresh_interval=30', headers={'Content-Type': 'application/x-www-form-urlencoded'})))
+            thread.start()
+            try:
+                self.assertTrue(entered.wait(1))
+                start = time.monotonic()
+                self.assertEqual(self.request('/health')[0], 200)
+                self.assertLess(time.monotonic() - start, .5)
+                self.assertEqual(self.m.state.config, original)
+            finally:
+                release.set()
+                thread.join(5)
+        self.assertEqual(results[0][0], 500)
+        self.assertEqual(self.m.state.config, original)
+
+    def test_async_forms_return_destination_without_following_redirect(self):
+        status, result = self.request('/api/students', b'name=Example&code=0001', headers={
+            'Content-Type': 'application/x-www-form-urlencoded', 'X-Async-Form': '1'})
+        self.assertEqual(status, 200)
+        self.assertEqual(result, {'ok': True, 'redirect': '/students'})
+        # A normal form still follows the original 303 to an HTML page.
+        status, result = self.request('/api/students', b'name=Second', headers={
+            'Content-Type': 'application/x-www-form-urlencoded'})
+        self.assertEqual(status, 200)
+        self.assertIsInstance(result, bytes)
+
+    def test_schedule_batch_single_save_and_recovery_after_save_failure(self):
+        journal = self.m.CONFIG_DIR / 'batch-test.jsonl'
+        self.m.state.schedules = [dict(copy.deepcopy(SCHEDULES[0]), id=str(i), code=f'{i:04d}',
+                                       time='16:30', days=[0], car_no4='', tickets={}, enabled=True, last_run='')
+                                  for i in range(5)]
+        queue = self.m.ScheduleQueue(journal)
+        original = copy.deepcopy(self.m.state.schedules)
+        with patch.object(self.m, 'schedule_queue', queue), patch.object(self.m, 'datetime') as clock:
+            clock.now.return_value = datetime(2026, 9, 14, 16, 30)
+            with patch.object(self.m, 'save_schedules', side_effect=OSError('expected')):
+                with self.assertRaises(OSError):
+                    self.m._scheduler_tick()
+            self.assertEqual(self.m.state.schedules, original)
+            self.assertEqual(len(queue.snapshot()), 5)
+            # Recreate the queue to simulate a restart after batch persistence.
+            self.m.schedule_queue = self.m.ScheduleQueue(journal)
+            with patch.object(self.m, 'save_schedules', wraps=self.m.save_schedules) as save:
+                with patch.object(self.m, '_start_action', return_value=True) as start:
+                    self.m._scheduler_tick()
+                    self.assertEqual(save.call_count, 1)
+                    self.assertEqual(start.call_count, 5)
+                    self.m._scheduler_tick()
+                    self.assertEqual(start.call_count, 5)
+        self.m._scheduled_inflight.clear()
+
+    def test_log_api_validates_cursor_and_returns_bounded_history(self):
+        status, result = self.request('/api/logs?before=invalid')
+        self.assertEqual(status, 400)
+        for i in range(510):
+            self.m.append_log({'id': f'api-{i:04d}', 'time': '12:00:00', 'ok': True})
+        status, result = self.request('/api/logs')
+        self.assertEqual(status, 200)
+        self.assertEqual(len(result['logs']), 500)
+        self.assertTrue(result['has_more'])
+
+    def test_scheduler_records_start_before_external_work(self):
+        self.external.stop()
+        queue = self.m.ScheduleQueue(self.m.CONFIG_DIR / 'dispatch-test.jsonl')
+        self.m.state.schedules = [dict(copy.deepcopy(SCHEDULES[0]), id='dispatch', code='0001',
+                                       time='16:30', days=[0], car_no4='1234', tickets={'free': 1},
+                                       enabled=True, last_run='')]
+        states_at_call = []
+
+        def observe(action):
+            job = next(job for job in queue.snapshot() if job['action'] == action)
+            states_at_call.append((action, job['status']))
+
+        with patch.object(self.m, 'schedule_queue', queue), patch.object(self.m, 'datetime') as clock:
+            clock.now.return_value = datetime(2026, 9, 14, 16, 30)
+            with patch.object(self.m, 'do_attendance', side_effect=lambda *args: observe('attendance')):
+                with patch.object(self.m, 'do_vehicle', side_effect=lambda *args: observe('vehicle')):
+                    self.m._scheduler_tick()
+                    self.m.action_runner._queues['attendance'].join()
+                    self.m.action_runner._queues['vehicle'].join()
+        self.assertEqual(sorted(states_at_call), [('attendance', 'running'), ('vehicle', 'running')])
+        self.assertTrue(all(job['status'] == 'done' for job in queue.snapshot()))
+        self.assertEqual(self.m.action_runner.snapshot()['resources'], [])
+        self.assertEqual(self.m._scheduled_inflight, set())
+
 
 if __name__ == "__main__":
     unittest.main()

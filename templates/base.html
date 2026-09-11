@@ -27,7 +27,7 @@
 </head>
 <body class="bg-gray-100 text-gray-900 dark:bg-gray-900 dark:text-gray-100 min-h-screen">
     <header class="app-header">
-        <h1><a href="/" class="brand"><span class="brand-mark" aria-hidden="true">↔</span>등하원차량등록</a></h1>
+        <h1><a href="/" class="brand"><img class="brand-mark" src="/static/tray.svg?v={{ static_version }}" alt="">등하원차량등록</a></h1>
         <nav class="app-nav" aria-label="주 메뉴">
             {% for path, label in [('/', '메인'), ('/students', '입소자 관리'), ('/schedules', '예약 관리'), ('/settings', '설정')] %}
             <a href="{{ path }}" {% if request.url.path == path or (path == '/settings' and request.url.path.startswith('/settings/')) %}aria-current="page"{% endif %}>{{ label }}</a>

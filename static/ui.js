@@ -13,7 +13,8 @@ document.addEventListener('submit', async event => {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 15000);
     try {
-        const response = await fetch(form.action, { method: 'POST', body, signal: controller.signal });
+        const response = await fetch(form.action, { method: 'POST', body,
+            headers: { 'X-Async-Form': '1' }, signal: controller.signal });
         if (!response.ok) {
             let message = '요청을 처리하지 못했습니다. 입력 내용을 확인해 주세요.';
             try {
@@ -22,7 +23,10 @@ document.addEventListener('submit', async event => {
             } catch {}
             throw new Error(message);
         }
-        if (response.redirected) location.assign(response.url);
+        if (response.headers.get('content-type')?.includes('application/json')) {
+            const result = await response.json();
+            location.assign(result.redirect || location.href);
+        } else if (response.redirected) location.assign(response.url);
         else location.reload();
     } catch (error) {
         if (status) {

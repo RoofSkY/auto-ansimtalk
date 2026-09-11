@@ -11,6 +11,7 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from types import SimpleNamespace
 from urllib.request import urlopen
+from urllib.parse import parse_qs, urlparse
 
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 from websockets.sync.client import connect
@@ -52,9 +53,18 @@ class Handler(BaseHTTPRequestHandler):
         route = self.path.split("?")[0]
         if route.startswith("/static/"):
             path = ROOT / "static" / Path(route).name
-            return self.reply(path.read_bytes(), "text/css" if path.suffix == ".css" else "text/javascript")
+            content_type = {'.css': 'text/css', '.svg': 'image/svg+xml'}.get(path.suffix, 'text/javascript')
+            return self.reply(path.read_bytes(), content_type)
         if route == "/api/actions":
             return self.reply(b'{"instance":"preview","revision":1,"resources":[]}')
+        if route == "/api/logs":
+            query = parse_qs(urlparse(self.path).query)
+            entries = [{**context['logs'][0], 'id': f'history-{i:04d}', 'time': '14:00:00'} for i in range(1002)]
+            if query.get('before'):
+                before = json.loads(query['before'][0])
+                entries = [entry for entry in entries if [entry['time'], entry['id']] < before]
+            return self.reply(json.dumps({'logs': entries[-500:], 'has_more': len(entries) > 500,
+                                          'date': '2026-09-11'}).encode())
         if route == "/stream":
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream")
@@ -76,6 +86,8 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         self.rfile.read(int(self.headers.get("Content-Length", 0)))
         if self.path == "/api/settings":
+            if self.headers.get('X-Async-Form') == '1':
+                return self.reply(b'{"ok":true,"redirect":"/settings?saved=test"}')
             self.send_response(303)
             self.send_header("Location", "/settings?saved=test")
             self.end_headers()
@@ -194,6 +206,18 @@ def main():
                             ]
                             for kind,message,ok,icon in icon_cases:
                                 assert evaluate('mainApp().logIcon('+json.dumps({'type':kind,'message':message,'ok':ok})+')') == icon
+                            assert evaluate("document.querySelectorAll('.log-entry svg').length === document.querySelectorAll('.log-entry').length")
+                            if width == 1920:
+                                evaluate("window.savedLogFixture = Alpine.$data(document.querySelector('.student-panel')).logs.slice()")
+                                evaluate("(() => {const app=Alpine.$data(document.querySelector('.student-panel')); for(let i=0;i<1200;i++) app.enqueueLog({id:'burst-'+String(i).padStart(4,'0'),time:'16:00:00',type:'입차',target:'예시',message:'입차',ok:true})})()")
+                                time.sleep(.2)
+                                assert evaluate("document.querySelectorAll('.log-entry').length") == 500
+                                assert evaluate("document.querySelectorAll('.log-entry svg').length") == 500
+                                evaluate("Alpine.$data(document.querySelector('.student-panel')).loadLogs(true)")
+                                time.sleep(.2)
+                                assert evaluate("document.querySelectorAll('.log-entry').length") == 1000
+                                evaluate("(() => {const app=Alpine.$data(document.querySelector('.student-panel')); app.resetLogs(); app.logs=window.savedLogFixture; app.autoScroll=true;})()")
+                                time.sleep(.1)
                             if width > 760:
                                 assert evaluate("(() => {const center = e => {const r=e.getBoundingClientRect();return r.x+r.width/2}; return [...document.querySelectorAll('.student-table')].every(table => {const headers=[...table.querySelector('.student-head').children]; return [...table.querySelectorAll('.student-row')].every(row => [...row.children].every((cell,i) => Math.abs(center(cell)-center(headers[i]))<1 && getComputedStyle(cell).textAlign==='center'))})})()")
                             evaluate("window.dispatchEvent(new CustomEvent('sse',{detail:{type:'in_cars',data:{cars:[]}}}))")

@@ -2,6 +2,7 @@
 
 import threading
 import uuid
+from queue import Queue
 from collections.abc import Callable
 
 
@@ -28,6 +29,37 @@ class ActionRunner:
         self._instance = uuid.uuid4().hex
         self._publish = publish
         self._report_error = report_error
+        self._queues = {"attendance": Queue(maxsize=100), "vehicle": Queue(maxsize=100)}
+        self._workers_started = False
+        self._closed = False
+
+    def _start_workers(self):
+        if self._workers_started:
+            return
+        for kind, count in (("attendance", 1), ("vehicle", 4)):
+            for i in range(count):
+                threading.Thread(target=self._worker, args=(kind,),
+                                 name=f"action-{kind}-{i}", daemon=True).start()
+        self._workers_started = True
+
+    def _worker(self, kind):
+        queue = self._queues[kind]
+        while True:
+            item = queue.get()
+            if item is None:
+                queue.task_done()
+                return
+            keys, work = item
+            try:
+                work()
+            except Exception as exc:
+                try:
+                    self._report_error(exc)
+                except Exception:
+                    pass
+            finally:
+                self._release(keys)
+                queue.task_done()
 
     def _snapshot(self) -> dict:
         return {"instance": self._instance, "revision": self._revision,
@@ -45,27 +77,29 @@ class ActionRunner:
         except Exception:
             pass
 
-    def start(self, keys: set[str], work: Callable) -> bool:
+    def start(self, keys: set[str], work: Callable, *, kind: str = "vehicle") -> bool:
         with self._lock:
-            if self._active & keys:
+            if self._closed or self._active & keys:
+                return False
+            self._start_workers()
+            queue = self._queues[kind]
+            if queue.full():
                 return False
             self._active.update(keys)
             self._changed()
-
-        def run():
-            try:
-                work()
-            except Exception as exc:
-                self._report_error(exc)
-            finally:
-                self._release(keys)
-
-        try:
-            threading.Thread(target=run, daemon=True).start()
-        except Exception:
-            self._release(keys)
-            raise
+            queue.put_nowait((set(keys), work))
         return True
+
+    def close(self):
+        """새 접수를 중단하고 이미 접수한 작업 뒤에서 작업자를 종료한다."""
+        with self._lock:
+            if self._closed:
+                return
+            self._closed = True
+        if self._workers_started:
+            for kind, count in (("attendance", 1), ("vehicle", 4)):
+                for _ in range(count):
+                    self._queues[kind].put(None)
 
     def _release(self, keys: set[str]) -> None:
         with self._lock:

@@ -29,6 +29,9 @@ import uvicorn
 
 import iparking
 from actions import ActionRunner, resource_keys
+from refresh import RefreshCoordinator
+from logstore import LogStore
+from schedule_queue import ScheduleQueue
 import ansim
 import ansim_web
 import autostart
@@ -194,34 +197,18 @@ def load_config() -> dict:
 
 
 def save_config(cfg: dict) -> None:
-    try:
-        # github_token 이 들어갈 수 있어 권한도 제한한다
-        jsonstore.save(CONFIG_PATH, cfg, private=True)
-    except Exception as e:
-        print(f"config 저장 실패: {e}", file=sys.stderr)
+    jsonstore.save(CONFIG_PATH, cfg, private=True)
+
+
+log_store = LogStore(LOGS_DIR)
 
 
 def append_log(entry: dict) -> None:
-    today = date.today().isoformat()
-    with open(LOGS_DIR / f"{today}.jsonl", "a", encoding="utf-8") as f:
-        f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    log_store.append(entry)
 
 
 def load_today_logs() -> list[dict]:
-    path = LOGS_DIR / f"{date.today().isoformat()}.jsonl"
-    if not path.exists():
-        return []
-    out = []
-    with open(path, encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                out.append(json.loads(line))
-            except Exception:
-                pass
-    return out
+    return log_store.all()
 
 
 # ---------- 전역 상태 ----------
@@ -243,9 +230,6 @@ class State:
         # 입소자별 등원/하원 로그 기록 여부 — None 이면 다음 동기화 때 당일 로그에서 복원
         self.att_logged: dict[str, dict[str, bool]] | None = None
 
-        # wake_tasks 로 이번 수동 갱신에서 실행할 작업을 지정 ("att" / "vehicle")
-        self.refresh_wake = threading.Event()
-        self.wake_tasks: set[str] = set()
         self.next_refresh_ts: float = 0.0
 
         self.sse_subscribers: list[asyncio.Queue] = []
@@ -258,6 +242,8 @@ state = State()
 _data_lock = threading.RLock()
 _background_reads = 0
 _backup_previews = {}
+schedule_queue = ScheduleQueue(CONFIG_DIR / "schedule_queue.jsonl")
+_scheduled_inflight: set[str] = set()
 
 
 def _data_locked(fn):
@@ -276,7 +262,7 @@ def _background_read(fn):
         global _background_reads
         with _data_lock:
             if (CONFIG_DIR / "restore_pending.json").exists():
-                return
+                return False
             _background_reads += 1
         try:
             return fn(*args, **kwargs)
@@ -309,6 +295,8 @@ def emit_log(kind: str, target: str, message: str, ok: bool,
     else:
         time_str = datetime.now().strftime("%H:%M:%S")
     entry = {
+        "id": uuid.uuid4().hex,
+        "date": date.today().isoformat(),
         "time": time_str,
         "type": kind,
         "target": target,
@@ -394,10 +382,8 @@ def _notify_vehicle(kind: str, name: str, car: str) -> None:
 
 
 # ---------- 액션 (백그라운드 스레드에서 실행) ----------
-def _trigger_refresh(*tasks: str) -> None:
-    """갱신 루프를 즉시 깨움. tasks 미지정 시 전체("att"+"vehicle") 갱신."""
-    state.wake_tasks |= set(tasks) or {"att", "vehicle"}
-    state.refresh_wake.set()
+def _trigger_refresh(*tasks: str, if_stale: bool = False) -> None:
+    refresh_manager.request(tasks, if_stale=if_stale)
 
 
 action_runner = ActionRunner(
@@ -408,22 +394,31 @@ _attendance_lock = threading.Lock()
 
 
 @_data_locked
-def _start_action(student: dict, action: str, *, tickets=None, tag=None) -> bool:
+def _start_action(student: dict, action: str, *, tickets=None, tag=None,
+                  before=None, after=None) -> bool:
     if student.get("id") and _find_student(student["id"]) is None:
         return False
     student = copy.deepcopy(student)
     tickets = copy.deepcopy(tickets)
 
     def work():
-        if action == "attendance":
-            try:
-                do_attendance(student, tag or "안심톡")
-            finally:
-                _trigger_refresh("att")
-        else:
-            do_vehicle(student, tickets, tag or "차량등록")
+        started = False
+        try:
+            if before:
+                before()
+            started = True
+            if action == "attendance":
+                try:
+                    do_attendance(student, tag or "안심톡")
+                finally:
+                    _trigger_refresh("att")
+            else:
+                do_vehicle(student, tickets, tag or "차량등록")
+        finally:
+            if after:
+                after(started)
 
-    return action_runner.start(resource_keys(student, action), work)
+    return action_runner.start(resource_keys(student, action), work, kind=action)
 
 
 def do_attendance(student: dict, tag: str = "안심톡") -> None:
@@ -540,24 +535,6 @@ def do_vehicle(student: dict, tickets: dict[str, int] | None = None,
 
 
 # ---------- 백그라운드 루프 ----------
-def refresh_loop():
-    """공통 갱신 루프 — 한 주기마다 차량 자동검색 + 등하원 상태 동기화를 함께 실행.
-
-    수동 새로고침/등하원처리/차량등록 시 refresh_wake 로 즉시 깨어나
-    (설정 스위치가 꺼져 있어도) 한 번 갱신하고 카운트다운을 리셋한다.
-    """
-    manual_tasks: set[str] | None = None  # None = 주기 도래(스위치 따름), set = 수동 트리거 범위
-    while True:
-        # 루프 전체를 보호 — 여기서 예외가 새어 나가면 스레드가 끝나고
-        # 차량 검색·등하원 동기화가 조용히 영구 정지한다
-        try:
-            manual_tasks = _refresh_tick(manual_tasks)
-        except Exception as e:
-            _log_loop_error("갱신", e)
-            time.sleep(5)
-            manual_tasks = None
-
-
 _loop_error_seen: dict[str, tuple[str, float]] = {}
 _LOOP_ERROR_REPEAT_SEC = 300
 
@@ -583,44 +560,42 @@ def _log_loop_error(what: str, e: Exception) -> None:
         pass
 
 
-def _refresh_tick(manual_tasks: set[str] | None) -> set[str] | None:
-    """한 주기 실행 후, 다음 주기에 쓸 manual_tasks 를 반환."""
-    if (manual_tasks is not None and "att" in manual_tasks) or \
-            (manual_tasks is None and state.config.get("att_sync", True)):
-        try:
-            _att_sync_once()
-            _report_att_health(True, "")
-        except Exception as e:
-            print(f"등하원 상태 동기화 오류: {e}", file=sys.stderr)
-            _report_att_health(False, f"{type(e).__name__}: {e}")
-    if (manual_tasks is not None and "vehicle" in manual_tasks) or \
-            (manual_tasks is None and state.config.get("auto_search")):
-        try:
-            _poll_once()
-        except Exception as e:
-            print(f"차량 검색 오류: {e}", file=sys.stderr)
-            _set_service_health("iparking", False)
+def _refresh_att():
     try:
-        interval = max(10, int(state.config.get("refresh_interval", 60)))
+        if _att_sync_once() is False:
+            return False
+        _report_att_health(True, "")
+        return True
+    except Exception as e:
+        _report_att_health(False, f"{type(e).__name__}: {e}")
+        return False
+
+
+def _refresh_vehicle():
+    try:
+        return _poll_once()
+    except Exception as e:
+        _set_service_health("iparking", False)
+        _log_loop_error("차량 검색", e)
+        return False
+
+
+def _refresh_interval():
+    try:
+        return max(10, int(state.config.get("refresh_interval", 60)))
     except Exception:
-        interval = 60
-    # 범위 지정 수동 갱신(상태 탭 클릭·등하원처리 후)은 주기 카운트다운을 건드리지
-    # 않는다 — 리셋하면 탭을 자주 누를수록 주기 갱신(차량 검색 포함)이 계속 밀린다.
-    partial = manual_tasks is not None and manual_tasks < {"att", "vehicle"}
-    if partial:
-        remaining = state.next_refresh_ts - time.time()
-        if remaining <= 0:
-            return None  # 대기 중 주기가 이미 도래 — 다음 틱을 주기 갱신으로
-    else:
-        remaining = interval
-        state.next_refresh_ts = time.time() + interval
-    emit_event("refreshed", {"next_in": round(remaining)})
-    if state.refresh_wake.wait(timeout=remaining):
-        state.refresh_wake.clear()
-        tasks = state.wake_tasks or {"att", "vehicle"}
-        state.wake_tasks = set()
-        return tasks
-    return None
+        return 60
+
+
+def _publish_refresh(seconds):
+    state.next_refresh_ts = time.time() + seconds
+    emit_event("refreshed", {"next_in": seconds})
+
+
+refresh_manager = RefreshCoordinator(
+    {"att": _refresh_att, "vehicle": _refresh_vehicle}, _refresh_interval,
+    lambda kind: state.config.get("att_sync" if kind == "att" else "auto_search", True),
+    _publish_refresh, _log_loop_error)
 
 
 def _service_snapshot() -> dict:
@@ -748,6 +723,7 @@ def _poll_once():
     state.poll_baseline = (state.poll_baseline | observed) & tracked
     state.prev_in_cars = current | (state.prev_in_cars & unknown)
     emit_event("in_cars", {"cars": list(state.prev_in_cars)})
+    return not errors
 
 
 def _build_att_logged() -> dict[str, dict[str, bool]]:
@@ -836,32 +812,68 @@ def _scheduler_tick() -> None:
     hhmm = now.strftime("%H:%M")
     weekday = now.weekday()
 
-    for sched in list(state.schedules):
-        if not sched.get("enabled", True):
-            continue
-        if sched.get("time", "") != hhmm:
-            continue
-        days = sched.get("days") or []
-        if not days or weekday not in days:
-            continue
-        # 하루 1회 보장 — 파일에 남겨 재시작해도 중복 실행되지 않게 한다
-        if sched.get("last_run") == today:
-            continue
-        sched["last_run"] = today
-        save_schedules(state.schedules)
+    due = [s for s in state.schedules if s.get("enabled", True)
+           and s.get("time") == hhmm and weekday in (s.get("days") or [])
+           and s.get("last_run") != today]
+    # 예약 파일보다 대기 기록을 먼저 저장하여 재시작 후 미시작 작업을 복구한다.
+    schedule_queue.enqueue(due, today)
+    jobs = schedule_queue.snapshot(today)
+    recorded = {job["schedule"]["id"] for job in jobs if job["date"] == today}
+    schedules = copy.deepcopy(state.schedules)
+    changed = False
+    for sched in schedules:
+        if sched["id"] in recorded and sched.get("last_run") != today:
+            sched["last_run"] = today
+            changed = True
+    if changed:
+        save_schedules(schedules)
+        state.schedules = schedules
 
-        code = sched.get("code", "")
-        car = sched.get("car_no4", "")
-        label = f"예약 {hhmm}"
-        tickets = sched.get("tickets") or {}
+    current_ids = {s["id"] for s in state.schedules}
+    for job in jobs:
+        key = job["id"]
+        if key in schedule_queue.interrupted:
+            emit_log("시스템", "예약", f"예약 {job['schedule']['time']} 실행 중 앱 종료 — 처리 결과를 확인해 주세요", False)
+            schedule_queue.change(key, "interrupted")
+            schedule_queue.interrupted.discard(key)
+            continue
+        if job["status"] != "pending" or key in _scheduled_inflight:
+            continue
+        if job["date"] != today or job["schedule"]["id"] not in current_ids:
+            schedule_queue.change(key, "expired")
+            emit_log("시스템", "예약", "실행 대기 예약의 날짜 또는 대상이 변경되어 실행을 생략했습니다", False)
+            continue
+        sched = job["schedule"]
+        action = job["action"]
+        student = {"name": f"예약 {sched['time']}", "code": sched.get("code", ""),
+                   "car_no4s": [sched["car_no4"]] if sched.get("car_no4") else []}
+        tag = "안심톡(예약)" if action == "attendance" else "차량등록(예약)"
+        _scheduled_inflight.add(key)
 
-        if code:
-            if not _start_action({"name": label, "code": code}, "attendance", tag="안심톡(예약)"):
-                emit_log("안심톡(예약)", f"{code} {label}", "동일 출석번호 처리 중 — 중복 실행 생략", False)
-        if car and tickets:
-            if not _start_action({"name": label, "car_no4s": [car]}, "vehicle",
-                                 tickets=tickets, tag="차량등록(예약)"):
-                emit_log("차량등록(예약)", f"{car} {label}", "동일 차량 처리 중 — 중복 실행 생략", False)
+        def before(key=key):
+            schedule_queue.change(key, "running")
+
+        def after(started, key=key):
+            try:
+                if started:
+                    schedule_queue.change(key, "done")
+            finally:
+                with _data_lock:
+                    _scheduled_inflight.discard(key)
+
+        try:
+            accepted = _start_action(student, action, tickets=sched.get("tickets"), tag=tag,
+                                     before=before, after=after)
+        except Exception:
+            _scheduled_inflight.discard(key)
+            raise
+        if not accepted:
+            _scheduled_inflight.discard(key)
+            if resource_keys(student, action) & set(action_runner.snapshot()["resources"]):
+                schedule_queue.change(key, "skipped")
+                target = f"{student['code'] if action == 'attendance' else sched['car_no4']} {student['name']}"
+                emit_log(tag, target, "동일 대상 처리 중 — 중복 실행 생략", False)
+            # 대기열이 가득 찬 경우 다음 틱에서 다시 접수한다.
 
 
 # ---------- 폼 파싱 ----------
@@ -948,10 +960,13 @@ def _secure_credential_files() -> None:
 async def lifespan(app: FastAPI):
     state.main_loop = asyncio.get_running_loop()
     threading.Thread(target=_secure_credential_files, daemon=True).start()
-    threading.Thread(target=refresh_loop, daemon=True).start()
+    refresh_manager.start()
     threading.Thread(target=scheduler_loop, daemon=True).start()
     threading.Thread(target=_auto_update_check, daemon=True).start()
-    yield
+    try:
+        yield
+    finally:
+        await asyncio.to_thread(refresh_manager.stop)
 
 
 app = FastAPI(lifespan=lifespan)
@@ -1024,6 +1039,9 @@ async def _local_only_guard(request: Request, call_next):
                 return JSONResponse({"error": "cross-origin request denied"}, status_code=403)
 
     response = await call_next(request)
+    if (request.method == "POST" and request.headers.get("x-async-form") == "1"
+            and response.status_code == 303 and response.headers.get("location")):
+        response = JSONResponse({"ok": True, "redirect": response.headers["location"]})
     # 클릭재킹 방지 — 악성 페이지가 이 화면을 iframe 으로 덮고 클릭을 유도하는 것을 차단
     response.headers.setdefault("X-Frame-Options", "DENY")
     response.headers.setdefault("Content-Security-Policy", "frame-ancestors 'none'")
@@ -1032,12 +1050,15 @@ async def _local_only_guard(request: Request, call_next):
 
 # ---------- 페이지 ----------
 @app.get("/", response_class=HTMLResponse)
-async def index(request: Request):
+def index(request: Request):
     _reset_att_if_new_day()
+    page = log_store.page()
     return templates.TemplateResponse(request, "index.html", {
         "students": state.students,
         "in_cars": list(state.prev_in_cars),
-        "logs": load_today_logs(),
+        "logs": page["logs"],
+        "logs_has_more": page["has_more"],
+        "logs_date": page["date"],
         "config": state.config,
         "att_status": state.att["status"],
         "att_times": state.att["times"],
@@ -1051,6 +1072,22 @@ async def students_page(request: Request):
     return templates.TemplateResponse(request, "students.html", {
         "students": state.students,
     })
+
+
+@app.get("/api/logs")
+def logs_page(kind: str = "all", before: str = "", day: str = ""):
+    cursor = None
+    if before:
+        try:
+            cursor = json.loads(before)
+            if (not isinstance(cursor, list) or len(cursor) != 2
+                    or not all(isinstance(value, str) for value in cursor)):
+                raise ValueError()
+        except ValueError:
+            return JSONResponse({"error": "잘못된 기록 위치입니다."}, status_code=400)
+    if day and day != date.today().isoformat():
+        cursor = None
+    return log_store.page(kind=kind, before=cursor)
 
 
 @app.get("/schedules", response_class=HTMLResponse)
@@ -1082,7 +1119,7 @@ def _settings_saved(what: str) -> RedirectResponse:
 
 
 @app.get("/settings", response_class=HTMLResponse)
-async def settings_page(request: Request):
+def settings_page(request: Request):
     ip_acc = _load_iparking_account()
     return templates.TemplateResponse(request, "settings.html", {
         "config": state.config,
@@ -1146,15 +1183,20 @@ async def _backup_body(request):
         raw.extend(chunk)
         if len(raw) > backups.MAX_BYTES:
             raise backups.BackupError("백업 파일은 2MB 이하로 선택해 주세요.")
-    return backups.decode(bytes(raw))
+    return await asyncio.to_thread(backups.decode, bytes(raw))
 
 
 @app.post("/api/backup/preview")
 async def preview_backup(request: Request):
     try:
-        data = backups.validate(await _backup_body(request), {k: v["max"] for k, v in iparking.TICKETS.items()})
+        raw = await _backup_body(request)
+        return await asyncio.to_thread(_preview_backup, raw)
     except backups.BackupError as exc:
         return JSONResponse({"error": str(exc)}, status_code=400)
+
+
+def _preview_backup(raw):
+    data = backups.validate(raw, {k: v["max"] for k, v in iparking.TICKETS.items()})
     with _data_lock:
         now = time.monotonic()
         for key in list(_backup_previews):
@@ -1182,7 +1224,7 @@ def _restore_backup(token):
         if preview["revision"] != backups.revision(state.students, state.schedules):
             _backup_previews.pop(token, None)
             return JSONResponse({"error": "확인 후 입소자 또는 예약이 변경되었습니다. 파일을 다시 선택해 주세요.", "reselect": True}, status_code=409)
-        if _background_reads or action_runner.snapshot()["resources"]:
+        if _background_reads or action_runner.snapshot()["resources"] or schedule_queue.has_pending():
             return JSONResponse({"error": "조회 또는 등하원·주차 처리가 진행 중입니다. 완료 후 다시 눌러 주세요."}, status_code=409)
         auto = backups.create(state.students, state.schedules, __version__)
         name = "before-restore-" + datetime.now().strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:8] + ".json"
@@ -1273,8 +1315,11 @@ def _action_response(student: dict, action: str):
     except Exception:
         return JSONResponse({"error": "작업을 시작하지 못했습니다."}, status_code=500)
     if not started:
-        return JSONResponse({"error": "같은 대상의 작업이 이미 처리 중입니다.",
-                             "actions": action_runner.snapshot()}, status_code=409)
+        snapshot = action_runner.snapshot()
+        duplicate = bool(resource_keys(student, action) & set(snapshot["resources"]))
+        return JSONResponse({"error": "같은 대상의 작업이 이미 처리 중입니다." if duplicate
+                             else "처리 대기열이 가득 찼습니다. 잠시 후 다시 시도해 주세요.",
+                             "actions": snapshot}, status_code=409 if duplicate else 503)
     return JSONResponse({"ok": True, "actions": action_runner.snapshot()}, status_code=202)
 
 
@@ -1290,10 +1335,10 @@ async def list_students():
 
 
 @app.post("/api/refresh")
-async def manual_refresh(scope: str = ""):
+async def manual_refresh(scope: str = "", if_stale: bool = False):
     """수동 새로고침. scope="att"/"vehicle" 로 범위 제한, 없으면 둘 다 즉시 실행."""
     if scope in ("att", "vehicle"):
-        _trigger_refresh(scope)
+        _trigger_refresh(scope, if_stale=if_stale)
     else:
         _trigger_refresh()
     return {"ok": True}
@@ -1358,46 +1403,41 @@ def delete_student(sid: str):
 # ---------- 예약 CRUD ----------
 @app.post("/api/schedules")
 async def add_schedule(request: Request):
-    form = await request.form()
-    with _data_lock:
-        if (CONFIG_DIR / "restore_pending.json").exists():
-            return JSONResponse({"error": "중단된 복원을 복구하려면 앱을 다시 시작해 주세요."}, status_code=503)
-        parsed = _parse_schedule_form(form)
-        if "error" in parsed:
-            return JSONResponse(parsed, status_code=400)
-        parsed["id"] = str(uuid.uuid4())
-        parsed["enabled"] = True
-        state.schedules.append(parsed)
-        save_schedules(state.schedules)
-        return RedirectResponse("/schedules", status_code=303)
+    return await asyncio.to_thread(_save_schedule_form, await request.form())
 
 
 @app.post("/api/schedules/{sid}/edit")
 async def edit_schedule(sid: str, request: Request):
-    form = await request.form()
-    with _data_lock:
-        if (CONFIG_DIR / "restore_pending.json").exists():
-            return JSONResponse({"error": "중단된 복원을 복구하려면 앱을 다시 시작해 주세요."}, status_code=503)
-        parsed = _parse_schedule_form(form)
-        if "error" in parsed:
-            return JSONResponse(parsed, status_code=400)
-        for i, s in enumerate(state.schedules):
-            if s.get("id") == sid:
-                parsed["id"] = sid
-                parsed["enabled"] = form.get("enabled") == "on"
-                # 승계하지 않으면 같은 분에 편집 시 그 예약이 한 번 더 실행된다
-                parsed["last_run"] = s.get("last_run", "")
-                state.schedules[i] = parsed
-                save_schedules(state.schedules)
+    return await asyncio.to_thread(_save_schedule_form, await request.form(), sid)
+
+
+@_data_locked
+def _save_schedule_form(form, sid=None):
+    parsed = _parse_schedule_form(form)
+    if "error" in parsed:
+        return JSONResponse(parsed, status_code=400)
+    schedules = copy.deepcopy(state.schedules)
+    if sid is None:
+        parsed.update(id=str(uuid.uuid4()), enabled=True)
+        schedules.append(parsed)
+    else:
+        for i, schedule in enumerate(schedules):
+            if schedule.get("id") == sid:
+                parsed.update(id=sid, enabled=form.get("enabled") == "on",
+                              last_run=schedule.get("last_run", ""))
+                schedules[i] = parsed
                 break
-        return RedirectResponse("/schedules", status_code=303)
+    save_schedules(schedules)
+    state.schedules = schedules
+    return RedirectResponse("/schedules", status_code=303)
 
 
 @app.post("/api/schedules/{sid}/delete")
 @_data_locked
 def delete_schedule(sid: str):
-    state.schedules = [s for s in state.schedules if s.get("id") != sid]
-    save_schedules(state.schedules)
+    schedules = [s for s in state.schedules if s.get("id") != sid]
+    save_schedules(schedules)
+    state.schedules = schedules
     return RedirectResponse("/schedules", status_code=303)
 
 
@@ -1421,31 +1461,37 @@ async def shutdown():
 # ---------- 설정 ----------
 @app.post("/api/settings")
 async def update_settings(request: Request):
-    form = await request.form()
-    state.config["auto_search"] = form.get("auto_search") == "on"
-    state.config["vehicle_toast"] = form.get("vehicle_toast") == "on"
-    state.config["vehicle_windows_notify"] = form.get("vehicle_windows_notify") == "on"
-    state.config["att_sync"] = form.get("att_sync") == "on"
+    return await asyncio.to_thread(_save_settings_form, await request.form())
+
+
+@_data_locked
+def _save_settings_form(form):
+    config = dict(state.config)
+    config["auto_search"] = form.get("auto_search") == "on"
+    config["vehicle_toast"] = form.get("vehicle_toast") == "on"
+    config["vehicle_windows_notify"] = form.get("vehicle_windows_notify") == "on"
+    config["att_sync"] = form.get("att_sync") == "on"
     raw = form.get("vehicle_toast_duration")
     if raw:
         try:
-            state.config["vehicle_toast_duration"] = max(1, int(raw))
+            config["vehicle_toast_duration"] = max(1, int(raw))
         except ValueError:
             pass
     raw = form.get("refresh_interval")
     if raw:
         try:
-            state.config["refresh_interval"] = max(10, int(raw))
+            config["refresh_interval"] = max(10, int(raw))
         except ValueError:
             pass
     raw = form.get("vehicle_ticket_count")
     if raw:
         try:
             limit = iparking.TICKETS[DEFAULT_VEHICLE_TICKET]["max"]
-            state.config["vehicle_ticket_count"] = min(limit, max(1, int(raw)))
+            config["vehicle_ticket_count"] = min(limit, max(1, int(raw)))
         except (ValueError, KeyError):
             pass
-    save_config(state.config)
+    save_config(config)
+    state.config = config
     return _settings_saved("설정")
 
 
@@ -1656,9 +1702,6 @@ def _run_tray():
     def on_open(_icon, _item):
         _open_browser()
 
-    def on_test(_icon, _item):
-        _notify_vehicle("입차", "알림 테스트", "테스트 차량")
-
     def on_ready(icon):
         icon.visible = True
         state.tray_icon = icon
@@ -1679,7 +1722,6 @@ def _run_tray():
         "auto-ansimtalk 서버 실행 중",
         menu=Menu(
             MenuItem("웹 페이지 열기", on_open, default=True),
-            MenuItem("입출차 알림 테스트", on_test),
             MenuItem("종료", on_quit),
         ),
     )
