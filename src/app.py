@@ -4,6 +4,7 @@
 """
 
 import asyncio
+import copy
 import json
 import os
 import re
@@ -26,6 +27,7 @@ from fastapi.templating import Jinja2Templates
 import uvicorn
 
 import iparking
+from actions import ActionRunner, resource_keys
 import ansim
 import ansim_web
 import autostart
@@ -364,12 +366,27 @@ def _trigger_refresh(*tasks: str) -> None:
     state.refresh_wake.set()
 
 
-def _run_action_then_refresh(fn, args, tasks: tuple[str, ...]) -> None:
-    """액션 실행 완료 후 해당 범위만 즉시 갱신 (등하원→att, 차량→vehicle)."""
-    try:
-        fn(*args)
-    finally:
-        _trigger_refresh(*tasks)
+action_runner = ActionRunner(
+    lambda snapshot: emit_event("actions", snapshot),
+    lambda exc: emit_log("시스템", "작업", f"처리 오류: {exc}", False),
+)
+_attendance_lock = threading.Lock()
+
+
+def _start_action(student: dict, action: str, *, tickets=None, tag=None) -> bool:
+    student = copy.deepcopy(student)
+    tickets = copy.deepcopy(tickets)
+
+    def work():
+        if action == "attendance":
+            try:
+                do_attendance(student, tag or "안심톡")
+            finally:
+                _trigger_refresh("att")
+        else:
+            do_vehicle(student, tickets, tag or "차량등록")
+
+    return action_runner.start(resource_keys(student, action), work)
 
 
 def do_attendance(student: dict, tag: str = "안심톡") -> None:
@@ -381,10 +398,12 @@ def do_attendance(student: dict, tag: str = "안심톡") -> None:
         _play_sound("S2.wav")
         return
     try:
-        ok = ansim.register(code)
-        msg = getattr(ansim, "LAST_MESSAGE", "") or (
-            "등록 완료" if ok else "등록 실패"
-        )
+        # 안심톡 세션과 LAST_MESSAGE를 공유하므로 결과를 함께 읽을 때까지 직렬화한다.
+        with _attendance_lock:
+            ok = ansim.register(code)
+            msg = getattr(ansim, "LAST_MESSAGE", "") or (
+                "등록 완료" if ok else "등록 실패"
+            )
         emit_log(tag, target, msg, ok)
         _play_sound("S1.wav" if ok else "S2.wav")
         if ok:
@@ -783,17 +802,12 @@ def _scheduler_tick() -> None:
         tickets = sched.get("tickets") or {}
 
         if code:
-            threading.Thread(
-                target=do_attendance,
-                args=({"name": label, "code": code}, "안심톡(예약)"),
-                daemon=True,
-            ).start()
+            if not _start_action({"name": label, "code": code}, "attendance", tag="안심톡(예약)"):
+                emit_log("안심톡(예약)", f"{code} {label}", "동일 출석번호 처리 중 — 중복 실행 생략", False)
         if car and tickets:
-            threading.Thread(
-                target=do_vehicle,
-                args=({"name": label, "car_no4s": [car]}, tickets, "차량등록(예약)"),
-                daemon=True,
-            ).start()
+            if not _start_action({"name": label, "car_no4s": [car]}, "vehicle",
+                                 tickets=tickets, tag="차량등록(예약)"):
+                emit_log("차량등록(예약)", f"{car} {label}", "동일 차량 처리 중 — 중복 실행 생략", False)
 
 
 # ---------- 폼 파싱 ----------
@@ -1034,11 +1048,7 @@ async def trigger_attendance(sid: str):
     student = _find_student(sid)
     if student is None:
         return JSONResponse({"error": "student not found"}, status_code=404)
-    threading.Thread(
-        target=_run_action_then_refresh,
-        args=(do_attendance, (student,), ("att",)), daemon=True,
-    ).start()
-    return {"ok": True}
+    return _action_response(student, "attendance")
 
 
 @app.post("/api/students/{sid}/vehicle")
@@ -1046,8 +1056,23 @@ async def trigger_vehicle(sid: str):
     student = _find_student(sid)
     if student is None:
         return JSONResponse({"error": "student not found"}, status_code=404)
-    threading.Thread(target=do_vehicle, args=(student,), daemon=True).start()
-    return {"ok": True}
+    return _action_response(student, "vehicle")
+
+
+def _action_response(student: dict, action: str):
+    try:
+        started = _start_action(student, action)
+    except Exception:
+        return JSONResponse({"error": "작업을 시작하지 못했습니다."}, status_code=500)
+    if not started:
+        return JSONResponse({"error": "같은 대상의 작업이 이미 처리 중입니다.",
+                             "actions": action_runner.snapshot()}, status_code=409)
+    return JSONResponse({"ok": True, "actions": action_runner.snapshot()}, status_code=202)
+
+
+@app.get("/api/actions")
+async def action_status():
+    return action_runner.snapshot()
 
 
 @app.get("/api/students/list")
@@ -1335,6 +1360,7 @@ async def event_stream(request: Request):
     # 접속 시점의 현재 상태를 먼저 내려줌 — 특히 refreshed 는 브라우저가
     # 첫 갱신 완료 방송보다 늦게 연결해도 카운트다운을 바로 받도록 필수
     initial_msgs = [{"type": "in_cars", "data": {"cars": list(state.prev_in_cars)}}]
+    initial_msgs.append({"type": "actions", "data": action_runner.snapshot()})
     if state.next_refresh_ts > 0:
         initial_msgs.append({"type": "refreshed", "data": {
             "next_in": max(0, round(state.next_refresh_ts - time.time())),

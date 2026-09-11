@@ -31,6 +31,7 @@
             <span class="col-span-4"></span>
         </div>
         <div class="space-y-1 overflow-y-auto flex-1">
+            <p x-show="actionError" x-text="actionError" role="alert" class="text-red-600 text-sm"></p>
             <template x-for="s in filteredStudents" :key="s.id">
                 <div class="grid grid-cols-12 gap-2 items-center p-2 rounded text-sm transition-colors"
                      :class="isParked(s) ? 'bg-green-300 dark:bg-green-700' : 'bg-gray-50 dark:bg-gray-700/50'">
@@ -45,11 +46,19 @@
                     <span class="col-span-2 text-gray-600 dark:text-gray-400 truncate tabular-nums"
                           x-text="outTimeOf(s)"></span>
                     <div class="col-span-4 flex gap-1 justify-end">
-                        <button @click="doAction(s.id, 'attendance', $event)"
+                        <button @click="doAction(s.id, 'attendance')"
+                                :disabled="isBusy(s, 'attendance')"
+                                :aria-busy="isBusy(s, 'attendance')"
+                                :class="isBusy(s, 'attendance') ? 'opacity-50' : ''"
+                                x-text="isBusy(s, 'attendance') ? '처리 확인 중…' : '등하원처리'"
                                 class="px-2 py-1 bg-blue-500 hover:bg-blue-600 active:bg-blue-700 text-white rounded text-xs">
                             등하원처리
                         </button>
-                        <button @click="doAction(s.id, 'vehicle', $event)"
+                        <button @click="doAction(s.id, 'vehicle')"
+                                :disabled="isBusy(s, 'vehicle')"
+                                :aria-busy="isBusy(s, 'vehicle')"
+                                :class="isBusy(s, 'vehicle') ? 'opacity-50' : ''"
+                                x-text="isBusy(s, 'vehicle') ? '처리 확인 중…' : '차량등록'"
                                 class="px-2 py-1 bg-blue-500 hover:bg-blue-600 active:bg-blue-700 text-white rounded text-xs">
                             차량등록
                         </button>
@@ -137,6 +146,15 @@ function mainApp() {
         attStatus: {{ att_status | tojson }},
         attTimes: {{ att_times | tojson }},
         refreshRemaining: {{ att_refresh_remaining }},
+        actionResources: [],
+        actionRevision: -1,
+        actionInstance: '',
+        actionsReady: false,
+        pendingActions: {},
+        actionError: '',
+        actionsSyncing: false,
+        actionTimer: null,
+        countdownTimer: null,
         searchQuery: '',
         currentTab: 'all',
         statusFilter: '전체',
@@ -157,14 +175,27 @@ function mainApp() {
             this.logs.sort((a, b) => (a.time || '').localeCompare(b.time || ''));
             this.connectSSE();
             this.$nextTick(() => this.scrollToBottom(true));
-            setInterval(() => {
+            this.countdownTimer = setInterval(() => {
                 if (this.refreshRemaining > 0) this.refreshRemaining--;
             }, 1000);
+            this.syncActions();
+            this.actionTimer = setInterval(() => {
+                if (!this.actionsReady || this.actionResources.length || Object.keys(this.pendingActions).length) {
+                    this.syncActions();
+                }
+            }, 3000);
+        },
+
+        destroy() {
+            clearInterval(this.actionTimer);
+            clearInterval(this.countdownTimer);
         },
 
         connectSSE() {
             window.sseBus.on((msg) => {
-                if (msg.type === 'log') {
+                if (msg.type === 'actions') {
+                    this.applyActions(msg.data);
+                } else if (msg.type === 'log') {
                     // 시간순 위치에 삽입 — 과거 시각의 보정 로그가 맨 아래에 붙지 않도록
                     const t = msg.data.time || '';
                     let i = this.logs.length;
@@ -291,18 +322,67 @@ function mainApp() {
             }, 800);
         },
 
-        async doAction(sid, action, ev) {
-            const btn = ev.currentTarget;
-            btn.disabled = true;
-            btn.classList.add('opacity-50');
+        applyActions(snapshot) {
+            if (snapshot.instance === this.actionInstance && snapshot.revision < this.actionRevision) return;
+            this.actionInstance = snapshot.instance;
+            this.actionRevision = snapshot.revision;
+            this.actionResources = snapshot.resources;
+            this.actionsReady = true;
+        },
+
+        isBusy(student, action) {
+            if (!this.actionsReady || this.pendingActions[`${student.id}:${action}`]) return true;
+            const keys = [`${action}:student:${student.id}`];
+            if (action === 'attendance') {
+                keys.push(`attendance:code:${(student.code || '').trim()}`);
+            } else {
+                for (const car of student.car_no4s || []) keys.push(`vehicle:car:${car.trim().slice(-4)}`);
+            }
+            return keys.some(key => this.actionResources.includes(key));
+        },
+
+        async syncActions() {
+            if (this.actionsSyncing) return;
+            this.actionsSyncing = true;
+            const controller = new AbortController();
+            const timer = setTimeout(() => controller.abort(), 10000);
             try {
-                await fetch(`/api/students/${sid}/${action}`, { method: 'POST' });
-                if (action === 'attendance') this.refreshRemaining = 0;
+                const r = await fetch('/api/actions', { cache: 'no-store', signal: controller.signal });
+                if (!r.ok) throw new Error('작업 상태 조회 실패');
+                this.applyActions(await r.json());
+                for (const key of Object.keys(this.pendingActions)) {
+                    if (this.pendingActions[key] === 'unknown') delete this.pendingActions[key];
+                }
+            } catch {
+                // 연결이 끊겨도 완료 여부를 확인하기 전에는 잠금을 풀지 않는다.
             } finally {
-                setTimeout(() => {
-                    btn.disabled = false;
-                    btn.classList.remove('opacity-50');
-                }, 500);
+                clearTimeout(timer);
+                this.actionsSyncing = false;
+            }
+        },
+
+        async doAction(sid, action) {
+            const student = this.students.find(s => s.id === sid);
+            if (!student || this.isBusy(student, action)) return;
+            const key = `${sid}:${action}`;
+            this.pendingActions[key] = 'sending';
+            this.actionError = '';
+            const controller = new AbortController();
+            const timer = setTimeout(() => controller.abort(), 15000);
+            try {
+                const r = await fetch(`/api/students/${sid}/${action}`, {
+                    method: 'POST', signal: controller.signal,
+                });
+                const result = await r.json();
+                if (result.actions) this.applyActions(result.actions);
+                if (!r.ok) this.actionError = result.error || '작업 요청 실패';
+                delete this.pendingActions[key];
+            } catch {
+                this.pendingActions[key] = 'unknown';
+                this.actionError = '서버 응답을 확인하지 못했습니다. 처리 상태를 다시 확인하고 있습니다.';
+                this.syncActions();
+            } finally {
+                clearTimeout(timer);
             }
         },
     };

@@ -81,6 +81,10 @@ auto-ansimtalk/
 
 ## 개발 참고
 
+- 등하원·차량등록 버튼은 실제 작업이 끝날 때까지 잠긴다. 같은 출석번호나 차량의 중복 요청은 서버에서도 차단하며, 예약 실행에도 적용한다. 차량은 끝 4자리를 기준으로 잠그므로 같은 끝번호의 다른 차량도 동시에 등록할 수 없다.
+- 작업 상태는 SSE로 열린 탭에 반영하고, 새로고침·재연결 시 복원한다. 응답이 끊겼을 때는 상태를 조회하며 요청을 자동 재전송하지 않는다.
+- 중복 실행 방지 검사: `.venv\Scripts\python.exe -m unittest discover -s dev/tests`
+
 - 개발·빌드 관련 파일은 모두 [dev/](dev/) 에 모여 있음 (배포 zip 에는 포함되지 않음)
 - 화면의 Tailwind 클래스를 수정하면 `dev\build_css.bat` 로 CSS 재생성
   (Tailwind CLI 는 용량이 커서 git 에 없음 — [릴리스](https://github.com/tailwindlabs/tailwindcss/releases) 에서 받아 `dev\bin\tailwindcss.exe` 로 배치)
