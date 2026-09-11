@@ -24,6 +24,10 @@ GLOBS = [
     "templates/*.html",
     "static/tailwind.css",
     "static/alpine.min.js",
+    "static/ui.css",
+    "static/ui.js",
+    "static/backup.css",
+    "static/backup.js",
     "static/app.ico",
     "sound/*",
 ]

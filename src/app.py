@@ -17,11 +17,12 @@ import urllib.request
 import uuid
 import webbrowser
 from contextlib import asynccontextmanager
+from functools import wraps
 from datetime import date, datetime
 from pathlib import Path
 
 from fastapi import FastAPI, Request, Form
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 import uvicorn
@@ -31,6 +32,7 @@ from actions import ActionRunner, resource_keys
 import ansim
 import ansim_web
 import autostart
+import backups
 import jsonstore
 import updater
 from version import __version__
@@ -128,7 +130,7 @@ def save_students(students: list[dict]) -> list[dict]:
     """정규화·정렬해 저장하고 그 결과 리스트를 반환.
 
     호출자는 반환값을 `state.students` 에 재대입할 것 — 제자리 정렬(list.sort)은
-    정렬 중 리스트가 일시적으로 비어 보여 폴링 스레드가 원생을 놓칠 수 있다.
+    정렬 중 리스트가 일시적으로 비어 보여 폴링 스레드가 입소자를 놓칠 수 있다.
     """
     normalized = [
         {
@@ -236,7 +238,9 @@ class State:
         self.poll_baseline: set[str] = set()
         self._poll_failing = False  # 차량 조회 실패 상태 — 로그를 주기마다 반복하지 않기 위함
         self._att_failing = False   # 등하원 동기화 실패 상태 (동일)
-        # 원생별 등원/하원 로그 기록 여부 — None 이면 다음 동기화 때 당일 로그에서 복원
+        self.service_health = {"ansim": None, "iparking": None}
+        self.last_refresh = ""
+        # 입소자별 등원/하원 로그 기록 여부 — None 이면 다음 동기화 때 당일 로그에서 복원
         self.att_logged: dict[str, dict[str, bool]] | None = None
 
         # wake_tasks 로 이번 수동 갱신에서 실행할 작업을 지정 ("att" / "vehicle")
@@ -249,7 +253,37 @@ class State:
         self.tray_icon = None  # visible 이후에만 게시: 초기화 중 알림 호출 방지
 
 
+backups.recover(CONFIG_DIR)
 state = State()
+_data_lock = threading.RLock()
+_background_reads = 0
+_backup_previews = {}
+
+
+def _data_locked(fn):
+    @wraps(fn)
+    def wrapped(*args, **kwargs):
+        with _data_lock:
+            if (CONFIG_DIR / "restore_pending.json").exists():
+                raise backups.BackupError("중단된 복원을 복구하려면 앱을 다시 시작해 주세요.")
+            return fn(*args, **kwargs)
+    return wrapped
+
+
+def _background_read(fn):
+    @wraps(fn)
+    def wrapped(*args, **kwargs):
+        global _background_reads
+        with _data_lock:
+            if (CONFIG_DIR / "restore_pending.json").exists():
+                return
+            _background_reads += 1
+        try:
+            return fn(*args, **kwargs)
+        finally:
+            with _data_lock:
+                _background_reads -= 1
+    return wrapped
 
 
 # ---------- 이벤트 발행 (스레드 → SSE) ----------
@@ -373,7 +407,10 @@ action_runner = ActionRunner(
 _attendance_lock = threading.Lock()
 
 
+@_data_locked
 def _start_action(student: dict, action: str, *, tickets=None, tag=None) -> bool:
+    if student.get("id") and _find_student(student["id"]) is None:
+        return False
     student = copy.deepcopy(student)
     tickets = copy.deepcopy(tickets)
 
@@ -562,6 +599,7 @@ def _refresh_tick(manual_tasks: set[str] | None) -> set[str] | None:
             _poll_once()
         except Exception as e:
             print(f"차량 검색 오류: {e}", file=sys.stderr)
+            _set_service_health("iparking", False)
     try:
         interval = max(10, int(state.config.get("refresh_interval", 60)))
     except Exception:
@@ -585,12 +623,24 @@ def _refresh_tick(manual_tasks: set[str] | None) -> set[str] | None:
     return None
 
 
+def _service_snapshot() -> dict:
+    return {"health": dict(state.service_health), "last_refresh": state.last_refresh}
+
+
+def _set_service_health(service: str, ok: bool | None) -> None:
+    state.service_health[service] = ok
+    if ok is not None:
+        state.last_refresh = datetime.now().strftime("%H:%M:%S")
+    emit_event("service_status", _service_snapshot())
+
+
 def _report_att_health(ok: bool, reason: str) -> None:
     """등하원 동기화 실패를 상태가 바뀔 때만 1회 알린다.
 
     실패를 stderr 로만 남기면(pythonw 실행 시 로그파일行) 사용자는 배지가 왜
     멈췄는지 알 수 없다. 비밀번호 변경·포털 개편 때 조용히 정지하는 것을 막는다.
     """
+    _set_service_health("ansim", ok)
     if not ok and not state._att_failing:
         state._att_failing = True
         emit_log("시스템", "등하원동기화", f"조회 실패 — {reason}"[:200], False)
@@ -605,6 +655,7 @@ def _report_poll_health(failed: int, total: int, errors: dict[str, Exception]) -
     실패를 조용히 삼키면(자격증명 만료·서버 점검 등) 자동 검색이 무기한 먹통이어도
     사용자는 알 수 없다. 반대로 매 주기 기록하면 로그가 도배되므로 전환 시점만 남긴다.
     """
+    _set_service_health("iparking", failed == 0 if total > 0 else None)
     if failed and not state._poll_failing:
         state._poll_failing = True
         reason = ""
@@ -617,6 +668,7 @@ def _report_poll_health(failed: int, total: int, errors: dict[str, Exception]) -
         emit_log("시스템", "차량검색", "조회 정상 복구", True)
 
 
+@_background_read
 def _poll_once():
     entry_to_student: dict[str, dict] = {}
     entry_to_full: dict[str, str] = {}
@@ -646,7 +698,7 @@ def _poll_once():
             errors[last4] = e
             return None
 
-    # last4 별 순차 조회는 원생 수에 비례해 느려짐 (~0.5초×N) — 병렬로 단축
+    # last4 별 순차 조회는 입소자 수에 비례해 느려짐 (~0.5초×N) — 병렬로 단축
     last4_list = list(by_last4.keys())
     with ThreadPoolExecutor(max_workers=8) as ex:
         results = dict(zip(last4_list, ex.map(_query, last4_list)))
@@ -699,7 +751,7 @@ def _poll_once():
 
 
 def _build_att_logged() -> dict[str, dict[str, bool]]:
-    """오늘 로그에서 원생별 등원/하원 기록 여부를 복원 — 동기화 로그 중복 방지."""
+    """오늘 로그에서 입소자별 등원/하원 기록 여부를 복원 — 동기화 로그 중복 방지."""
     logged: dict[str, dict[str, bool]] = {}
     for e in load_today_logs():
         if not str(e.get("type", "")).startswith("안심톡") or not e.get("ok"):
@@ -717,6 +769,7 @@ def _build_att_logged() -> dict[str, dict[str, bool]]:
     return logged
 
 
+@_background_read
 def _att_sync_once():
     _reset_att_if_new_day()
     status_map = ansim_web.fetch_status_map()
@@ -774,6 +827,7 @@ def scheduler_loop():
         time.sleep(30)
 
 
+@_data_locked
 def _scheduler_tick() -> None:
     _reset_att_if_new_day()
 
@@ -901,6 +955,13 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(lifespan=lifespan)
+
+
+@app.exception_handler(backups.BackupError)
+async def backup_error_handler(request: Request, exc: backups.BackupError):
+    return JSONResponse({"error": str(exc)}, status_code=503)
+
+
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 def _static_version() -> str:
     """정적 파일 캐시 무효화 키.
@@ -912,7 +973,7 @@ def _static_version() -> str:
     try:
         stamp = max(
             p.stat().st_mtime
-            for name in ("tailwind.css", "alpine.min.js")
+            for name in ("tailwind.css", "alpine.min.js", "ui.css", "ui.js", "backup.css", "backup.js")
             if (p := STATIC_DIR / name).exists()
         )
         return f"{__version__}-{int(stamp)}"
@@ -936,7 +997,7 @@ async def _local_only_guard(request: Request, call_next):
     127.0.0.1 바인딩은 '읽기' 만 막을 뿐 '쓰기' 는 막지 못한다. 사용자가 아무 웹페이지나
     열어두면 그 페이지가 자동 제출 폼으로 이 서버의 POST 를 호출할 수 있고
     (허위 등하원 문자 발송, 주차권 소진, 서버 종료), Host 를 위조한 DNS 리바인딩으로는
-    원생 개인정보를 읽어갈 수도 있다.
+    입소자 개인정보를 읽어갈 수도 있다.
 
     - Host 검증: 로컬 이름으로 온 요청만 처리 (DNS 리바인딩 차단)
     - Origin 검증: 상태를 바꾸는 요청은 출처 확인 (CSRF 차단).
@@ -948,6 +1009,8 @@ async def _local_only_guard(request: Request, call_next):
         return JSONResponse({"error": "invalid host"}, status_code=421)
 
     if request.method not in ("GET", "HEAD", "OPTIONS"):
+        if (CONFIG_DIR / "restore_pending.json").exists():
+            return JSONResponse({"error": "복원 처리 중이거나 복구가 필요합니다. 잠시 후 다시 시도해 주세요. 계속 표시되면 앱을 다시 시작해 주세요."}, status_code=503)
         origin = request.headers.get("origin")
         if origin is not None:
             # 포트는 보지 않는다 — 앱이 다른 포트로 떠도 자기 화면의 폼은 동작해야 함.
@@ -979,6 +1042,7 @@ async def index(request: Request):
         "att_status": state.att["status"],
         "att_times": state.att["times"],
         "att_refresh_remaining": max(0, round(state.next_refresh_ts - time.time())),
+        "service_status": _service_snapshot(),
     })
 
 
@@ -1031,12 +1095,154 @@ async def settings_page(request: Request):
     })
 
 
+# ---------- 백업 및 복원 ----------
+def _backup_summary():
+    automatic = []
+    for path in sorted((CONFIG_DIR / "backups").glob("before-restore-*.json"), reverse=True)[:10]:
+        if re.fullmatch(r"before-restore-[0-9]{8}-[0-9]{6}-[a-f0-9]{8}\.json", path.name):
+            try:
+                stamp = datetime.strptime(path.name[15:30], "%Y%m%d-%H%M%S").astimezone().isoformat()
+            except ValueError:
+                continue
+            automatic.append({"name": path.name, "created_at": stamp})
+    return {"students": len(state.students), "schedules": len(state.schedules),
+            "last_backup": jsonstore.load(CONFIG_DIR / "backup_meta.json").get("last_backup", ""),
+            "automatic": automatic}
+
+
+@app.get("/settings/backup", response_class=HTMLResponse)
+def backup_page(request: Request):
+    with _data_lock:
+        summary = _backup_summary()
+    return templates.TemplateResponse(request, "backup.html", {"backup_summary": summary})
+
+
+@app.get("/api/backup/summary")
+def backup_summary():
+    with _data_lock:
+        return _backup_summary()
+
+
+@app.post("/api/backup/export")
+@_data_locked
+def export_backup():
+    try:
+        data = backups.create(state.students, state.schedules, __version__)
+        backups.validate(data, {k: v["max"] for k, v in iparking.TICKETS.items()})
+        raw = json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8")
+        if len(raw) > backups.MAX_BYTES:
+            raise backups.BackupError("백업 데이터가 2MB를 초과합니다.")
+        name = "ansimtalk-backup-" + datetime.now().strftime("%Y%m%d-%H%M%S") + ".json"
+        jsonstore.save(CONFIG_DIR / "backup_meta.json", {"last_backup": data["created_at"]}, private=True)
+        return Response(raw, media_type="application/json", headers={
+            "Content-Disposition": f'attachment; filename="{name}"', "Cache-Control": "no-store"})
+    except (backups.BackupError, OSError) as exc:
+        return JSONResponse({"error": f"백업 파일을 만들지 못했습니다. {exc}"}, status_code=400)
+
+
+async def _backup_body(request):
+    raw = bytearray()
+    async for chunk in request.stream():
+        raw.extend(chunk)
+        if len(raw) > backups.MAX_BYTES:
+            raise backups.BackupError("백업 파일은 2MB 이하로 선택해 주세요.")
+    return backups.decode(bytes(raw))
+
+
+@app.post("/api/backup/preview")
+async def preview_backup(request: Request):
+    try:
+        data = backups.validate(await _backup_body(request), {k: v["max"] for k, v in iparking.TICKETS.items()})
+    except backups.BackupError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+    with _data_lock:
+        now = time.monotonic()
+        for key in list(_backup_previews):
+            if _backup_previews[key]["expires"] <= now:
+                del _backup_previews[key]
+        if len(_backup_previews) >= 8:
+            del _backup_previews[next(iter(_backup_previews))]
+        token = uuid.uuid4().hex
+        _backup_previews[token] = {"data": data, "expires": now + 600,
+                                   "revision": backups.revision(state.students, state.schedules)}
+        return {"token": token, "created_at": data["created_at"],
+                "current": {"students": len(state.students), "schedules": len(state.schedules)},
+                "incoming": {"students": len(data["students"]), "schedules": len(data["schedules"])}}
+
+
+def _restore_backup(token):
+    if not _data_lock.acquire(blocking=False):
+        return JSONResponse({"error": "데이터를 저장 중입니다. 잠시 후 다시 시도해 주세요."}, status_code=409)
+    try:
+        if (CONFIG_DIR / "restore_pending.json").exists():
+            return JSONResponse({"error": "중단된 복원을 복구하려면 앱을 다시 시작해 주세요."}, status_code=503)
+        preview = _backup_previews.get(token)
+        if not preview or preview["expires"] <= time.monotonic():
+            return JSONResponse({"error": "확인 시간이 만료되었습니다. 파일을 다시 선택해 주세요.", "reselect": True}, status_code=409)
+        if preview["revision"] != backups.revision(state.students, state.schedules):
+            _backup_previews.pop(token, None)
+            return JSONResponse({"error": "확인 후 입소자 또는 예약이 변경되었습니다. 파일을 다시 선택해 주세요.", "reselect": True}, status_code=409)
+        if _background_reads or action_runner.snapshot()["resources"]:
+            return JSONResponse({"error": "조회 또는 등하원·주차 처리가 진행 중입니다. 완료 후 다시 눌러 주세요."}, status_code=409)
+        auto = backups.create(state.students, state.schedules, __version__)
+        name = "before-restore-" + datetime.now().strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:8] + ".json"
+        automatic_path = CONFIG_DIR / "backups" / name
+        try:
+            backups.validate(auto, {k: v["max"] for k, v in iparking.TICKETS.items()})
+            jsonstore.save(automatic_path, auto, private=True)
+            # 자동 백업이 실제로 읽히는지 확인한 다음 원본 파일을 변경한다.
+            if backups.decode(automatic_path.read_bytes()) != auto:
+                raise backups.BackupError("복원 전 자동 백업을 확인하지 못했습니다.")
+            students, schedules = backups.materialize(preview["data"])
+            backups.replace(CONFIG_DIR, students, schedules, state.students, state.schedules)
+        except (OSError, backups.BackupError) as exc:
+            return JSONResponse({"error": str(exc)}, status_code=500)
+        state.students, state.schedules = students, schedules
+        state.att = {"date": date.today().isoformat(), "status": {}, "times": {}}
+        state.att_logged = None
+        state.prev_in_cars.clear()
+        state.last_seen_plate.clear()
+        state.poll_baseline.clear()
+        _backup_previews.clear()
+        emit_event("data_restored", {})
+        emit_log("시스템", "백업", f"입소자 {len(students)}명·예약 {len(schedules)}개 복원 완료", True)
+        _trigger_refresh()
+        return {"ok": True, "students": len(students), "schedules": len(schedules),
+                "automatic_backup": name}
+    finally:
+        _data_lock.release()
+
+
+@app.post("/api/backup/restore")
+async def restore_backup(request: Request):
+    try:
+        body = await _backup_body(request)
+        if not isinstance(body, dict) or not isinstance(body.get("token"), str):
+            raise backups.BackupError("복원할 파일을 먼저 선택해 주세요.")
+    except backups.BackupError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+    return await asyncio.to_thread(_restore_backup, body["token"])
+
+
+@app.get("/api/backup/automatic/{name}")
+def automatic_backup(name: str):
+    if not re.fullmatch(r"before-restore-[0-9]{8}-[0-9]{6}-[a-f0-9]{8}\.json", name):
+        return JSONResponse({"error": "백업 파일을 찾지 못했습니다."}, status_code=404)
+    path = CONFIG_DIR / "backups" / name
+    try:
+        raw = path.read_bytes()
+    except OSError:
+        return JSONResponse({"error": "백업 파일을 읽지 못했습니다."}, status_code=404)
+    return Response(raw, media_type="application/json", headers={
+        "Content-Disposition": f'attachment; filename="{name}"', "Cache-Control": "no-store"})
+
+
 # ---------- 액션 API ----------
 def _find_student(sid: str) -> dict | None:
-    """안정 식별자로 원생 조회.
+    """안정 식별자로 입소자 조회.
 
-    배열 인덱스로 지정하면 원생 추가/삭제로 순서가 밀렸을 때 열려 있던 화면이
-    엉뚱한 원생을 처리한다(잘못된 보호자에게 문자 발송). 반드시 id 로 찾을 것.
+    배열 인덱스로 지정하면 입소자 추가/삭제로 순서가 밀렸을 때 열려 있던 화면이
+    엉뚱한 입소자를 처리한다(잘못된 보호자에게 문자 발송). 반드시 id 로 찾을 것.
     """
     if not sid:
         return None
@@ -1044,7 +1250,8 @@ def _find_student(sid: str) -> dict | None:
 
 
 @app.post("/api/students/{sid}/attendance")
-async def trigger_attendance(sid: str):
+@_data_locked
+def trigger_attendance(sid: str):
     student = _find_student(sid)
     if student is None:
         return JSONResponse({"error": "student not found"}, status_code=404)
@@ -1052,7 +1259,8 @@ async def trigger_attendance(sid: str):
 
 
 @app.post("/api/students/{sid}/vehicle")
-async def trigger_vehicle(sid: str):
+@_data_locked
+def trigger_vehicle(sid: str):
     student = _find_student(sid)
     if student is None:
         return JSONResponse({"error": "student not found"}, status_code=404)
@@ -1077,7 +1285,7 @@ async def action_status():
 
 @app.get("/api/students/list")
 async def list_students():
-    """열려 있는 화면이 원생 목록 변경(students_changed)을 반영할 때 사용."""
+    """열려 있는 화면이 입소자 목록 변경(students_changed)을 반영할 때 사용."""
     return {"students": state.students}
 
 
@@ -1092,7 +1300,8 @@ async def manual_refresh(scope: str = ""):
 
 
 @app.post("/api/students/{sid}/status")
-async def set_student_status(sid: str, status: str = Form(...)):
+@_data_locked
+def set_student_status(sid: str, status: str = Form(...)):
     student = _find_student(sid)
     if student is None:
         return JSONResponse({"error": "student not found"}, status_code=404)
@@ -1102,7 +1311,7 @@ async def set_student_status(sid: str, status: str = Form(...)):
     return {"ok": True}
 
 
-# ---------- 원생 CRUD ----------
+# ---------- 입소자 CRUD ----------
 def _commit_students(students: list[dict]) -> None:
     """저장 후 state 를 새 리스트로 교체하고, 열려 있는 화면에 변경을 알린다."""
     state.students = save_students(students)
@@ -1110,7 +1319,8 @@ def _commit_students(students: list[dict]) -> None:
 
 
 @app.post("/api/students")
-async def add_student(name: str = Form(""), code: str = Form(""), cars: str = Form("")):
+@_data_locked
+def add_student(name: str = Form(""), code: str = Form(""), cars: str = Form("")):
     if not name.strip():
         return RedirectResponse("/students", status_code=303)
     car_list = [c.strip() for c in cars.split(",") if c.strip()]
@@ -1124,7 +1334,8 @@ async def add_student(name: str = Form(""), code: str = Form(""), cars: str = Fo
 
 
 @app.post("/api/students/{sid}/edit")
-async def edit_student(sid: str, name: str = Form(""), code: str = Form(""), cars: str = Form("")):
+@_data_locked
+def edit_student(sid: str, name: str = Form(""), code: str = Form(""), cars: str = Form("")):
     student = _find_student(sid)
     if student is None:
         return RedirectResponse("/students", status_code=303)
@@ -1137,7 +1348,8 @@ async def edit_student(sid: str, name: str = Form(""), code: str = Form(""), car
 
 
 @app.post("/api/students/{sid}/delete")
-async def delete_student(sid: str):
+@_data_locked
+def delete_student(sid: str):
     if _find_student(sid) is not None:
         _commit_students([s for s in state.students if s.get("id") != sid])
     return RedirectResponse("/students", status_code=303)
@@ -1147,36 +1359,43 @@ async def delete_student(sid: str):
 @app.post("/api/schedules")
 async def add_schedule(request: Request):
     form = await request.form()
-    parsed = _parse_schedule_form(form)
-    if "error" in parsed:
-        return JSONResponse(parsed, status_code=400)
-    parsed["id"] = str(uuid.uuid4())
-    parsed["enabled"] = True
-    state.schedules.append(parsed)
-    save_schedules(state.schedules)
-    return RedirectResponse("/schedules", status_code=303)
+    with _data_lock:
+        if (CONFIG_DIR / "restore_pending.json").exists():
+            return JSONResponse({"error": "중단된 복원을 복구하려면 앱을 다시 시작해 주세요."}, status_code=503)
+        parsed = _parse_schedule_form(form)
+        if "error" in parsed:
+            return JSONResponse(parsed, status_code=400)
+        parsed["id"] = str(uuid.uuid4())
+        parsed["enabled"] = True
+        state.schedules.append(parsed)
+        save_schedules(state.schedules)
+        return RedirectResponse("/schedules", status_code=303)
 
 
 @app.post("/api/schedules/{sid}/edit")
 async def edit_schedule(sid: str, request: Request):
     form = await request.form()
-    parsed = _parse_schedule_form(form)
-    if "error" in parsed:
-        return JSONResponse(parsed, status_code=400)
-    for i, s in enumerate(state.schedules):
-        if s.get("id") == sid:
-            parsed["id"] = sid
-            parsed["enabled"] = form.get("enabled") == "on"
-            # 승계하지 않으면 같은 분에 편집 시 그 예약이 한 번 더 실행된다
-            parsed["last_run"] = s.get("last_run", "")
-            state.schedules[i] = parsed
-            save_schedules(state.schedules)
-            break
-    return RedirectResponse("/schedules", status_code=303)
+    with _data_lock:
+        if (CONFIG_DIR / "restore_pending.json").exists():
+            return JSONResponse({"error": "중단된 복원을 복구하려면 앱을 다시 시작해 주세요."}, status_code=503)
+        parsed = _parse_schedule_form(form)
+        if "error" in parsed:
+            return JSONResponse(parsed, status_code=400)
+        for i, s in enumerate(state.schedules):
+            if s.get("id") == sid:
+                parsed["id"] = sid
+                parsed["enabled"] = form.get("enabled") == "on"
+                # 승계하지 않으면 같은 분에 편집 시 그 예약이 한 번 더 실행된다
+                parsed["last_run"] = s.get("last_run", "")
+                state.schedules[i] = parsed
+                save_schedules(state.schedules)
+                break
+        return RedirectResponse("/schedules", status_code=303)
 
 
 @app.post("/api/schedules/{sid}/delete")
-async def delete_schedule(sid: str):
+@_data_locked
+def delete_schedule(sid: str):
     state.schedules = [s for s in state.schedules if s.get("id") != sid]
     save_schedules(state.schedules)
     return RedirectResponse("/schedules", status_code=303)
@@ -1361,6 +1580,7 @@ async def event_stream(request: Request):
     # 첫 갱신 완료 방송보다 늦게 연결해도 카운트다운을 바로 받도록 필수
     initial_msgs = [{"type": "in_cars", "data": {"cars": list(state.prev_in_cars)}}]
     initial_msgs.append({"type": "actions", "data": action_runner.snapshot()})
+    initial_msgs.append({"type": "service_status", "data": _service_snapshot()})
     if state.next_refresh_ts > 0:
         initial_msgs.append({"type": "refreshed", "data": {
             "next_in": max(0, round(state.next_refresh_ts - time.time())),

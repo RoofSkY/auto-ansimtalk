@@ -1,226 +1,60 @@
 {% extends "base.html" %}
 {% block title %}설정{% endblock %}
+{% macro toggle(name, label, checked, model='') %}
+<label class="setting-row"><span>{{ label }}</span><span class="switch"><input type="checkbox" name="{{ name }}" role="switch" {% if checked %}checked{% endif %} {% if model %}x-model="{{ model }}"{% endif %}><span class="switch-track"></span></span></label>
+{% endmacro %}
 {% block content %}
-<div class="max-w-md mx-auto bg-white dark:bg-gray-800 rounded-lg shadow p-6">
-    <h2 class="text-xl font-bold mb-4">설정</h2>
-
-    <div class="space-y-5">
-    <label class="flex items-center justify-between cursor-pointer">
-        <span>Windows 시작 시 자동 실행</span>
-        <span class="relative inline-block h-7 w-14 shrink-0">
-            <input type="checkbox" onchange="toggleAutostart(this)" class="peer sr-only"
-                   {% if autostart_enabled %}checked{% endif %}>
-            <span class="absolute inset-0 rounded-full bg-gray-300 dark:bg-gray-600 peer-checked:bg-blue-600 transition-colors"></span>
-            <span class="absolute left-1 top-1 h-5 w-5 rounded-full bg-white shadow transition-transform peer-checked:translate-x-7"></span>
-        </span>
-    </label>
-
-    <form action="/api/settings" method="post" class="space-y-5">
-        <label class="flex items-center justify-between cursor-pointer">
-            <span>입출차 알림</span>
-            <span class="relative inline-block h-7 w-14 shrink-0">
-                <input type="checkbox" name="vehicle_toast" class="peer sr-only"
-                       {% if config.vehicle_toast %}checked{% endif %}>
-                <span class="absolute inset-0 rounded-full bg-gray-300 dark:bg-gray-600 peer-checked:bg-blue-600 transition-colors"></span>
-                <span class="absolute left-1 top-1 h-5 w-5 rounded-full bg-white shadow transition-transform peer-checked:translate-x-7"></span>
-            </span>
-        </label>
-
-        <label class="flex items-center justify-between cursor-pointer">
-            <span>알림 방식</span>
-            <span class="flex gap-2 items-center">
-                <span class="text-sm">웹</span>
-                <span class="relative inline-block h-7 w-14 shrink-0">
-                    <input type="checkbox" name="vehicle_windows_notify" class="peer sr-only"
-                           role="switch" aria-label="Windows 알림 사용 (끄면 웹 알림)"
-                           {% if config.vehicle_windows_notify %}checked{% endif %}>
-                    <span class="absolute inset-0 rounded-full bg-gray-300 dark:bg-gray-600 peer-checked:bg-blue-600 transition-colors"></span>
-                    <span class="absolute left-1 top-1 h-5 w-5 rounded-full bg-white shadow transition-transform peer-checked:translate-x-7"></span>
-                </span>
-                <span class="text-sm">Windows</span>
-            </span>
-        </label>
-
-        <div>
-            <button type="button" onclick="testWindowsNotification(this)"
-                    class="px-4 py-1.5 bg-blue-500 hover:bg-blue-600 text-white rounded text-sm">Windows 알림 테스트</button>
-            <p id="notification-test-status" role="status" aria-live="polite"
-               class="text-sm text-gray-500 dark:text-gray-400 mb-1"></p>
-            <label class="block text-sm text-gray-500 dark:text-gray-400 mb-1">웹 알림 표시 시간 (초, 최소 1)</label>
-            <div class="flex gap-2 items-center">
-                <input name="vehicle_toast_duration" type="number"
-                       value="{{ config.vehicle_toast_duration }}" min="1"
-                       class="px-3 py-1.5 border rounded dark:bg-gray-700 dark:border-gray-600 w-32">
-                <button class="px-4 py-1.5 bg-blue-500 hover:bg-blue-600 text-white rounded text-sm">저장</button>
-            </div>
-        </div>
-
-        <label class="flex items-center justify-between cursor-pointer">
-            <span>원생 차량 자동검색</span>
-            <span class="relative inline-block h-7 w-14 shrink-0">
-                <input type="checkbox" name="auto_search" class="peer sr-only"
-                       {% if config.auto_search %}checked{% endif %}>
-                <span class="absolute inset-0 rounded-full bg-gray-300 dark:bg-gray-600 peer-checked:bg-blue-600 transition-colors"></span>
-                <span class="absolute left-1 top-1 h-5 w-5 rounded-full bg-white shadow transition-transform peer-checked:translate-x-7"></span>
-            </span>
-        </label>
-
-        <label class="flex items-center justify-between cursor-pointer">
-            <span>등하원 상태 동기화</span>
-            <span class="relative inline-block h-7 w-14 shrink-0">
-                <input type="checkbox" name="att_sync" class="peer sr-only"
-                       {% if config.att_sync %}checked{% endif %}>
-                <span class="absolute inset-0 rounded-full bg-gray-300 dark:bg-gray-600 peer-checked:bg-blue-600 transition-colors"></span>
-                <span class="absolute left-1 top-1 h-5 w-5 rounded-full bg-white shadow transition-transform peer-checked:translate-x-7"></span>
-            </span>
-        </label>
-
-        <div>
-            <label class="block text-sm text-gray-500 dark:text-gray-400 mb-1">차량등록 매수</label>
-            <div class="flex gap-2 items-center">
-                <input type="hidden" name="vehicle_ticket_count" value="{{ config.vehicle_ticket_count }}">
-                <button type="button" onclick="cycleTicket(this)"
-                        class="ticket-btn px-3 py-1.5 border rounded text-sm whitespace-nowrap"
-                        data-color="{{ vehicle_ticket.color }}"
-                        data-max="{{ vehicle_ticket.max }}"
-                        data-label="{{ vehicle_ticket.label }}"
-                        title="클릭할 때마다 매수 증가 (최대 {{ vehicle_ticket.max }}매)"></button>
-                <button class="px-4 py-1.5 bg-blue-500 hover:bg-blue-600 text-white rounded text-sm">저장</button>
-            </div>
-        </div>
-
-        <div>
-            <label class="block text-sm text-gray-500 dark:text-gray-400 mb-1">
-                갱신 주기 (초, 최소 10) — 차량 자동검색 · 등하원 상태
-            </label>
-            <div class="flex gap-2 items-center">
-                <input name="refresh_interval" type="number"
-                       value="{{ config.refresh_interval }}" min="10"
-                       class="px-3 py-1.5 border rounded dark:bg-gray-700 dark:border-gray-600 w-32">
-                <button class="px-4 py-1.5 bg-blue-500 hover:bg-blue-600 text-white rounded text-sm">저장</button>
-            </div>
-        </div>
-    </form>
-    </div>
-
-    <div class="mt-8 pt-4 border-t dark:border-gray-700">
-        <h3 class="font-semibold mb-3 text-sm">관리 페이지</h3>
-        <div class="flex gap-3">
-            <a href="/students"
-               class="px-4 py-2 bg-blue-500 hover:bg-blue-600 text-white rounded text-sm">
-                원생 관리
-            </a>
-            <a href="/schedules"
-               class="px-4 py-2 bg-blue-500 hover:bg-blue-600 text-white rounded text-sm">
-                차량 예약 등록 관리
-            </a>
-        </div>
-    </div>
-
-    <div class="mt-6 pt-4 border-t dark:border-gray-700">
-        <h3 class="font-semibold mb-3 text-sm">안심톡 계정</h3>
-        <form action="/api/settings/ansim" method="post" class="space-y-3">
-            <div>
-                <label class="block text-sm text-gray-500 dark:text-gray-400 mb-1">아이디</label>
-                <input name="user_id" value="{{ ansim_user_id }}" autocomplete="off"
-                       class="px-3 py-1.5 border rounded dark:bg-gray-700 dark:border-gray-600 w-48">
-            </div>
-            <div>
-                <label class="block text-sm text-gray-500 dark:text-gray-400 mb-1">비밀번호</label>
-                <input name="password" type="password" placeholder="변경할 때만 입력" autocomplete="new-password"
-                       class="px-3 py-1.5 border rounded dark:bg-gray-700 dark:border-gray-600 w-48">
-            </div>
-            <button class="px-4 py-1.5 bg-blue-500 hover:bg-blue-600 text-white rounded text-sm">저장</button>
-            <p class="text-xs text-gray-500 dark:text-gray-400">
-                저장 시 기존 로그인 세션이 초기화되고 새 계정으로 즉시 동기화합니다.
-            </p>
+<div class="settings-layout" x-data="{ windows: {{ config.vehicle_windows_notify | tojson }}, notifications: {{ config.vehicle_toast | tojson }} }">
+    <div class="page-heading"><h2>설정</h2><span class="muted">v{{ version }}</span></div>
+    <div class="settings-grid">
+        <form action="/api/settings" method="post" data-async-form data-dirty-form class="panel settings-card">
+            <h3>일반 설정</h3>
+            <section class="settings-section"><h4>입출차 알림</h4>
+                {{ toggle('vehicle_toast', '입출차 알림 받기', config.vehicle_toast, 'notifications') }}
+                <div x-show="notifications">
+                    <label class="setting-row"><span>알림 방식</span><span class="button-row"><span class="hint" :style="!windows ? 'color:var(--blue);font-weight:700' : ''">웹</span><span class="switch"><input type="checkbox" name="vehicle_windows_notify" x-model="windows" role="switch" aria-label="Windows 알림 사용 (끄면 웹 알림)" {% if config.vehicle_windows_notify %}checked{% endif %}><span class="switch-track"></span></span><span class="hint" :style="windows ? 'color:var(--blue);font-weight:700' : ''">Windows</span></span></label>
+                    <div><button id="notification-test-button" type="button" @click="testNotification($el, windows)" class="btn btn-outline">알림 테스트</button><p id="notification-test-status" role="status" aria-live="polite" class="form-status"></p></div>
+                    <label class="setting-row" x-show="!windows"><span>웹 알림 표시 시간</span><span class="button-row"><input aria-label="웹 알림 표시 시간" name="vehicle_toast_duration" type="number" value="{{ config.vehicle_toast_duration }}" min="1" required><span class="hint">초</span></span></label>
+                </div>
+            </section>
+            <section class="settings-section"><h4>자동 갱신</h4>
+                {{ toggle('auto_search', '입소자 차량 자동검색', config.auto_search) }}
+                {{ toggle('att_sync', '등하원 상태 동기화', config.att_sync) }}
+                <label class="setting-row"><span>갱신 주기</span><span class="button-row"><input aria-label="갱신 주기" name="refresh_interval" type="number" value="{{ config.refresh_interval }}" min="10" required><span class="hint">초</span></span></label>
+            </section>
+            <section class="settings-section"><h4>주차권 등록</h4><label class="setting-row"><span>{{ vehicle_ticket.label }}</span><select name="vehicle_ticket_count" aria-label="주차권 등록 매수">{% for n in range(1, vehicle_ticket.max + 1) %}<option value="{{ n }}" {% if config.vehicle_ticket_count == n %}selected{% endif %}>{{ n }}장</option>{% endfor %}</select></label></section>
+            <div class="save-bar"><span data-dirty-status class="hint" role="status"></span><button class="btn btn-primary">일반 설정 저장</button></div>
+            <p data-form-status role="status" class="form-status"></p>
         </form>
-    </div>
-
-    <div class="mt-6 pt-4 border-t dark:border-gray-700">
-        <h3 class="font-semibold mb-3 text-sm">아이파킹(주차) 계정</h3>
-        <form action="/api/settings/iparking" method="post" class="space-y-3">
-            <div>
-                <label class="block text-sm text-gray-500 dark:text-gray-400 mb-1">스토어 ID (주차장 아이디)</label>
-                <input name="store_id" value="{{ iparking_store_id }}" autocomplete="off"
-                       class="px-3 py-1.5 border rounded dark:bg-gray-700 dark:border-gray-600 w-48">
-            </div>
-            <div>
-                <label class="block text-sm text-gray-500 dark:text-gray-400 mb-1">아이디</label>
-                <input name="user_id" value="{{ iparking_user_id }}" autocomplete="off"
-                       class="px-3 py-1.5 border rounded dark:bg-gray-700 dark:border-gray-600 w-48">
-            </div>
-            <div>
-                <label class="block text-sm text-gray-500 dark:text-gray-400 mb-1">비밀번호</label>
-                <input name="password" type="password" placeholder="변경할 때만 입력" autocomplete="new-password"
-                       class="px-3 py-1.5 border rounded dark:bg-gray-700 dark:border-gray-600 w-48">
-            </div>
-            <button class="px-4 py-1.5 bg-blue-500 hover:bg-blue-600 text-white rounded text-sm">저장</button>
-            <p class="text-xs text-gray-500 dark:text-gray-400">
-                저장 시 기존 주차 세션이 초기화되고 새 계정으로 즉시 재로그인합니다. 결과가 메인 화면 로그에 표시됩니다.
-            </p>
-        </form>
-    </div>
-
-    <div class="mt-6 pt-4 border-t dark:border-gray-700">
-        <h3 class="font-semibold mb-3 text-sm">업데이트</h3>
-        <div class="flex items-center gap-3">
-            <span class="text-sm text-gray-500 dark:text-gray-400">현재 버전 v{{ version }}</span>
-            <button id="btn-update" onclick="checkUpdate()"
-                    class="px-4 py-1.5 bg-blue-500 hover:bg-blue-600 text-white rounded text-sm">
-                업데이트 확인
-            </button>
+        <div class="settings-stack">
+            <section class="panel settings-card"><h3>안심톡 계정</h3>
+                <form action="/api/settings/ansim" method="post" data-async-form class="account-fields">
+                    <div class="field"><label for="ansim-id">아이디</label><input id="ansim-id" name="user_id" value="{{ ansim_user_id }}" autocomplete="username"></div>
+                    <div class="field"><label for="ansim-password">비밀번호</label><input id="ansim-password" name="password" type="password" placeholder="변경할 때만 입력" autocomplete="new-password"></div>
+                    <div><button class="btn">안심톡 계정 저장</button></div><p data-form-status role="status" class="form-status"></p>
+                </form>
+            </section>
+            <section class="panel settings-card"><h3>아이파킹 계정</h3>
+                <form action="/api/settings/iparking" method="post" data-async-form class="account-fields">
+                    <div class="field"><label for="parking-store">스토어 ID (주차장 아이디)</label><input id="parking-store" name="store_id" value="{{ iparking_store_id }}" autocomplete="off"></div>
+                    <div class="field"><label for="parking-id">아이디</label><input id="parking-id" name="user_id" value="{{ iparking_user_id }}" autocomplete="username"></div>
+                    <div class="field"><label for="parking-password">비밀번호</label><input id="parking-password" name="password" type="password" placeholder="변경할 때만 입력" autocomplete="new-password"></div>
+                    <div><button class="btn">아이파킹 계정 저장</button></div><p data-form-status role="status" class="form-status"></p>
+                </form>
+            </section>
         </div>
-        <p id="update-status" class="text-xs text-gray-500 dark:text-gray-400 mt-2"></p>
     </div>
-
-    <div class="mt-6 pt-4 border-t dark:border-gray-700">
-        <h3 class="font-semibold mb-2 text-sm">서버</h3>
-        <button onclick="shutdownServer()"
-                class="px-4 py-2 bg-red-500 hover:bg-red-600 text-white rounded text-sm">
-            서버 종료
-        </button>
-        <p class="text-xs text-gray-500 dark:text-gray-400 mt-2">
-            종료 시 자동 입출차 감지와 예약 실행도 모두 멈춥니다.
-        </p>
-    </div>
+    <section class="panel settings-card management-card"><h3>백업 및 복원</h3>
+        <div class="setting-row"><div><span>입소자 정보와 예약 보관</span><p class="hint">파일로 저장하고, 복원할 내용을 확인한 뒤 가져옵니다.</p></div><a href="/settings/backup" class="btn btn-primary">백업 및 복원</a></div>
+    </section>
+    <section class="panel settings-card management-card"><h3>앱 관리</h3>
+        <label class="setting-row"><span>Windows 시작 시 자동 실행 <small class="hint">· 자동 저장</small></span><span class="switch"><input type="checkbox" role="switch" onchange="toggleAutostart(this)" {% if autostart_enabled %}checked{% endif %}><span class="switch-track"></span></span></label>
+        <div class="setting-row"><span>현재 버전 v{{ version }}</span><button id="btn-update" type="button" onclick="checkUpdate()" class="btn">업데이트 확인</button></div><p id="update-status" role="status" class="form-status"></p>
+        <div class="setting-row"><div><span>서버 종료</span><p class="hint">자동 검색과 예약 실행도 함께 멈춥니다.</p></div><button type="button" onclick="shutdownServer()" class="btn btn-danger">서버 종료</button></div>
+    </section>
 </div>
-
-<div id="save-toast"
-     class="hidden fixed top-20 left-1/2 -translate-x-1/2 z-50 px-6 py-3 rounded-lg shadow-lg
-            bg-green-600 text-white text-sm font-semibold
-            opacity-0 transition-opacity duration-500"></div>
-
+<div id="save-toast" role="status" class="hidden fixed top-20 left-1/2 -translate-x-1/2 z-50 px-6 py-3 rounded-lg shadow-lg bg-green-600 text-white text-sm font-semibold opacity-0 transition-opacity duration-500"></div>
 <script>
-function renderTicketBtn(btn) {
-    const input = btn.previousElementSibling;
-    const v = parseInt(input.value) || 0;
-    const label = btn.dataset.label;
-    btn.textContent = `${label} × ${v}`;
-    if (v > 0) {
-        btn.style.backgroundColor = btn.dataset.color;
-        btn.style.color = '#1f2937';
-        btn.style.borderColor = '#9ca3af';
-        btn.style.fontWeight = '600';
-    } else {
-        btn.style.backgroundColor = '';
-        btn.style.color = '';
-        btn.style.borderColor = '';
-        btn.style.fontWeight = '';
-        btn.classList.add('text-gray-500', 'dark:text-gray-400', 'border-gray-300', 'dark:border-gray-500');
-    }
-}
-
-function cycleTicket(btn) {
-    const input = btn.previousElementSibling;
-    const max = parseInt(btn.dataset.max) || 1;
-    let v = (parseInt(input.value) || 0) + 1;
-    if (v > max) v = 1;   // 차량등록 버튼은 최소 1장 등록 — 0 은 건너뜀
-    input.value = v;
-    renderTicketBtn(btn);
-}
-document.querySelectorAll('.ticket-btn').forEach(renderTicketBtn);
-
 function showSaved(text, ok = true) {
     const el = document.getElementById('save-toast');
     el.textContent = text;
@@ -241,11 +75,26 @@ function showSaved(text, ok = true) {
     history.replaceState(null, '', location.pathname);
 })();
 
-async function testWindowsNotification(btn) {
+async function testNotification(btn, windows) {
+    if (btn.disabled) return;
     const status = document.getElementById('notification-test-status');
     btn.disabled = true;
     status.textContent = '테스트 알림 요청 중...';
     try {
+        if (!windows) {
+            const input = btn.form.elements.namedItem('vehicle_toast_duration');
+            if (!input.reportValidity()) {
+                status.textContent = '';
+                return;
+            }
+            window.dispatchEvent(new CustomEvent('sse', { detail: {
+                type: 'vehicle_notify',
+                data: { kind: '웹 알림 테스트', name: '', car: '테스트 알림입니다.',
+                        duration_ms: Number(input.value) * 1000 },
+            } }));
+            status.textContent = '';
+            return;
+        }
         const r = await fetch('/api/settings/notifications/test', { method: 'POST' });
         const result = await r.json();
         if (!r.ok) throw new Error(result.error || '알림 요청 실패');

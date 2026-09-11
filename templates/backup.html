@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block title %}백업 및 복원{% endblock %}
+{% block content %}
+<link rel="stylesheet" href="/static/backup.css?v={{ static_version }}">
+<script defer src="/static/backup.js?v={{ static_version }}"></script>
+{% macro icon(kind) %}
+<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+{% if kind == 'download' %}<path d="M12 3v12m-5-5 5 5 5-5M4 16v5h16v-5"/>
+{% elif kind == 'upload' %}<path d="M12 16V4m-5 5 5-5 5 5M4 16v5h16v-5"/>
+{% else %}<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8zM14 2v6h6M8 13h8M8 17h6"/>{% endif %}
+</svg>
+{% endmacro %}
+<div class="backup-page" id="backup-page">
+    <nav class="backup-breadcrumb" aria-label="현재 위치"><a href="/settings">← 설정</a><span aria-hidden="true">／</span><span>백업 및 복원</span></nav>
+    <div class="backup-heading"><div><h2>백업 및 복원</h2><p>입소자 정보와 예약을 보관하고, 저장한 파일로 다시 가져옵니다.</p></div><span class="backup-tag">입소자 · 예약 데이터</span></div>
+    <div class="backup-columns">
+        <section class="panel backup-card">
+            <div class="backup-card-title"><span class="backup-icon">{{ icon('download') }}</span><div><h3>백업 파일 저장</h3><p>현재 입소자와 예약을 하나의 파일로 저장합니다.</p></div></div>
+            <p class="backup-section-label">백업할 데이터</p>
+            <div class="backup-stats"><div><p>입소자 정보</p><strong id="backup-students">{{ backup_summary.students }}</strong><span>명</span></div><div><p>예약</p><strong id="backup-schedules">{{ backup_summary.schedules }}</strong><span>개</span></div></div>
+            <p class="backup-scope">이름 · 출석번호 · 차량번호 · 예약 시간과 요일 · 주차권 매수</p>
+            <div class="backup-card-bottom"><button type="button" class="btn btn-primary" id="backup-export">{{ icon('download') }} 백업 파일 저장</button><p class="backup-last" id="backup-last">최근 백업　{{ backup_summary.last_backup or '아직 저장한 백업이 없습니다.' }}</p></div>
+        </section>
+        <section class="panel backup-card">
+            <div class="backup-card-title"><span class="backup-icon">{{ icon('upload') }}</span><div><h3>백업에서 복원</h3><p>저장해 둔 백업 파일을 선택해 주세요.</p></div></div>
+            <div class="backup-upload">{{ icon('file') }}<strong>백업 파일을 선택해 주세요</strong><p>이 앱에서 저장한 JSON 백업 파일 · 최대 2MB</p><button type="button" class="btn" id="backup-select">파일 선택</button><input type="file" id="backup-file" accept=".json,application/json" hidden aria-label="백업 파일 선택"></div>
+            <p class="backup-restore-note">파일을 선택하면 복원할 내용을 먼저 확인할 수 있습니다.</p>
+        </section>
+    </div>
+    <p id="backup-status" class="form-status" role="status" aria-live="polite"></p>
+    <section class="panel backup-steps" aria-label="복원 순서"><strong>복원 순서</strong><p><span>1</span>파일 선택</p><b aria-hidden="true">→</b><p><span>2</span>변경 내용 확인</p><b aria-hidden="true">→</b><p><span>3</span>복원 완료</p></section>
+    <p class="backup-note">안심톡·아이파킹 계정과 비밀번호, 앱 설정 및 처리 기록은 백업에 포함하지 않습니다.</p>
+    <details class="panel backup-history"><summary>복원 전 자동 백업</summary><p class="hint">최근 10개의 백업입니다. 다시 가져오려면 다운로드한 파일을 선택해 주세요.</p><ul id="backup-history"></ul></details>
+</div>
+<dialog id="backup-dialog" class="backup-dialog" aria-labelledby="restore-title" aria-describedby="restore-description">
+    <div class="backup-dialog-heading"><div><h2 id="restore-title">복원 내용 확인</h2><p id="restore-description">선택한 백업 파일의 내용으로 입소자와 예약을 교체합니다.</p></div><button type="button" class="backup-close" id="restore-close" aria-label="닫기">×</button></div>
+    <div class="backup-dialog-body">
+        <div class="backup-file-summary">{{ icon('file') }}<div><strong id="restore-filename"></strong><p id="restore-created"></p></div><span>✓ 확인 완료</span></div>
+        <table class="backup-comparison"><thead><tr><th scope="col">항목</th><th scope="col">현재 데이터</th><th scope="col">복원 후</th></tr></thead><tbody><tr><th scope="row">입소자 정보</th><td id="restore-current-students"></td><td id="restore-new-students"></td></tr><tr><th scope="row">예약</th><td id="restore-current-schedules"></td><td id="restore-new-schedules"></td></tr></tbody></table>
+        <div class="backup-warning"><p>현재 목록에 추가하는 방식이 아니라, 백업 시점의 내용으로 교체합니다.</p><p>복원한 예약은 꺼진 상태로 가져옵니다. 확인 후 켜 주세요.</p></div>
+        <p class="backup-preserve">✓ 복원 전 현재 데이터를 자동으로 백업합니다.</p>
+        <p class="form-status" id="restore-status" role="status" aria-live="polite"></p>
+    </div>
+    <div class="backup-dialog-footer"><button type="button" class="btn" id="restore-cancel" autofocus>취소</button><button type="button" class="btn btn-primary" id="restore-confirm">이 내용으로 복원</button></div>
+</dialog>
+{% endblock %}

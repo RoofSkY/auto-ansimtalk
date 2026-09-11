@@ -430,7 +430,7 @@ $deleteData = $true
 if ($Silent) { $deleteData = -not $KeepData }
 else {
     $r = [System.Windows.Forms.MessageBox]::Show(
-        "원생 목록, 계정 등 데이터(config, logs 폴더)도 함께 삭제할까요?`n`n'아니요'를 누르면 데이터는 남겨둡니다.",
+        "입소자 목록, 계정 등 데이터(config, logs 폴더)도 함께 삭제할까요?`n`n'아니요'를 누르면 데이터는 남겨둡니다.",
         "$AppTitle 제거", 'YesNo', 'Question')
     $deleteData = ($r -eq 'Yes')
 }

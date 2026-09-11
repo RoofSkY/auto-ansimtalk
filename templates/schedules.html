@@ -1,192 +1,39 @@
 {% extends "base.html" %}
 {% block title %}예약 관리{% endblock %}
-{% block content %}
-<div class="max-w-6xl mx-auto bg-white dark:bg-gray-800 rounded-lg shadow p-6">
-    <h2 class="text-xl font-bold mb-4">예약 관리</h2>
-
-    <form action="/api/schedules" method="post" class="mb-6 p-3 bg-gray-50 dark:bg-gray-700 rounded space-y-3">
-        <div class="flex gap-3 items-end flex-wrap">
-            <div>
-                <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">시각</label>
-                <input name="time" placeholder="09:00" required maxlength="5"
-                       oninput="formatTimeInput(this)"
-                       class="px-3 py-1.5 border rounded dark:bg-gray-600 dark:border-gray-500 w-24">
-            </div>
-            <div>
-                <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">출석번호</label>
-                <input name="code" class="px-3 py-1.5 border rounded dark:bg-gray-600 dark:border-gray-500 w-24">
-            </div>
-            <div>
-                <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">차량번호</label>
-                <input name="car_no4" class="px-3 py-1.5 border rounded dark:bg-gray-600 dark:border-gray-500 w-24">
-            </div>
-            {% for ttype in ticket_order %}
-                {% if ttype in tickets %}
-                {% if tickets[ttype].entry == "number" %}
-                <div>
-                    <label class="ticket-box px-3 py-1.5 border rounded text-sm whitespace-nowrap"
-                           style="cursor:text;display:inline-block" data-color="{{ tickets[ttype].color }}"
-                           title="숫자 부분을 직접 입력 (최대 {{ tickets[ttype].max }}매)">
-                        <span>{{ tickets[ttype].label }} ×</span>
-                        <input type="number" name="tk_{{ ttype }}" value="0" min="0" max="{{ tickets[ttype].max }}"
-                               oninput="renderTicketBox(this.closest('.ticket-box'))"
-                               onblur="if(this.value==='')this.value=0;renderTicketBox(this.closest('.ticket-box'))"
-                               class="ticket-num"
-                               style="width:3.5ch;background:transparent;border:0;outline:none;color:inherit;font:inherit;padding:0;text-align:left">
-                    </label>
-                </div>
-                {% else %}
-                <div>
-                    <input type="hidden" name="tk_{{ ttype }}" value="0">
-                    <button type="button" onclick="cycleTicket(this)"
-                            class="ticket-btn px-3 py-1.5 border rounded text-sm whitespace-nowrap"
-                            data-color="{{ tickets[ttype].color }}"
-                            data-max="{{ tickets[ttype].max }}"
-                            data-label="{{ tickets[ttype].label }}"
-                            title="클릭할 때마다 매수 증가 (최대 {{ tickets[ttype].max }}매, 초과 시 0)"></button>
-                </div>
-                {% endif %}
-                {% endif %}
-            {% endfor %}
-        </div>
-        <div class="flex gap-3 items-center flex-wrap">
-            <span class="text-xs text-gray-500 dark:text-gray-400">요일:</span>
-            {% for label in day_labels %}
-            <label class="flex items-center gap-1 cursor-pointer">
-                <input type="checkbox" name="day_{{ loop.index0 }}" checked>
-                <span class="text-sm">{{ label }}</span>
-            </label>
-            {% endfor %}
-            <div class="flex-1"></div>
-            <button class="px-4 py-1.5 bg-blue-500 hover:bg-blue-600 text-white rounded">추가</button>
-        </div>
-    </form>
-
-    <div class="space-y-2">
-        {% for s in schedules %}
-        <div class="bg-gray-50 dark:bg-gray-700 rounded p-3 flex gap-2 items-center">
-            <form action="/api/schedules/{{ s.id }}/edit" method="post" class="flex-1 flex gap-2 items-end flex-wrap">
-                <label class="flex items-center" title="활성/비활성">
-                    <input type="checkbox" name="enabled" {% if s.enabled %}checked{% endif %} class="w-4 h-4">
-                </label>
-                <input name="time" value="{{ s.time }}" maxlength="5" oninput="formatTimeInput(this)"
-                       class="px-2 py-1 border rounded dark:bg-gray-600 dark:border-gray-500 w-20">
-                <input name="code" value="{{ s.code }}" placeholder="출석" class="px-2 py-1 border rounded dark:bg-gray-600 dark:border-gray-500 w-20">
-                <input name="car_no4" value="{{ s.car_no4 }}" placeholder="차량" class="px-2 py-1 border rounded dark:bg-gray-600 dark:border-gray-500 w-20">
-                {% for ttype in ticket_order %}
-                    {% if ttype in tickets %}
-                    {% if tickets[ttype].entry == "number" %}
-                    <label class="ticket-box px-2 py-1 border rounded text-sm whitespace-nowrap"
-                           style="cursor:text;display:inline-block" data-color="{{ tickets[ttype].color }}"
-                           title="숫자 부분을 직접 입력 (최대 {{ tickets[ttype].max }}매)">
-                        <span>{{ tickets[ttype].label }} ×</span>
-                        <input type="number" name="tk_{{ ttype }}" value="{{ s.tickets.get(ttype, 0) }}"
-                               min="0" max="{{ tickets[ttype].max }}"
-                               oninput="renderTicketBox(this.closest('.ticket-box'))"
-                               onblur="if(this.value==='')this.value=0;renderTicketBox(this.closest('.ticket-box'))"
-                               class="ticket-num"
-                               style="width:3.5ch;background:transparent;border:0;outline:none;color:inherit;font:inherit;padding:0;text-align:left">
-                    </label>
-                    {% else %}
-                    <div>
-                        <input type="hidden" name="tk_{{ ttype }}" value="{{ s.tickets.get(ttype, 0) }}">
-                        <button type="button" onclick="cycleTicket(this)"
-                                class="ticket-btn px-2 py-1 border rounded text-sm whitespace-nowrap"
-                                data-color="{{ tickets[ttype].color }}"
-                                data-max="{{ tickets[ttype].max }}"
-                                data-label="{{ tickets[ttype].label }}"
-                                title="클릭할 때마다 매수 증가 (최대 {{ tickets[ttype].max }}매, 초과 시 0)"></button>
-                    </div>
-                    {% endif %}
-                    {% endif %}
-                {% endfor %}
-                <div class="flex gap-2 items-center">
-                    {% for label in day_labels %}
-                    <label class="flex items-center gap-1 cursor-pointer">
-                        <input type="checkbox" name="day_{{ loop.index0 }}" {% if loop.index0 in s.days %}checked{% endif %}>
-                        <span class="text-sm">{{ label }}</span>
-                    </label>
-                    {% endfor %}
-                </div>
-                <button class="px-3 py-1 bg-blue-500 hover:bg-blue-600 text-white rounded text-sm">저장</button>
-            </form>
-            <form action="/api/schedules/{{ s.id }}/delete" method="post"
-                  onsubmit="return confirm('정말 삭제할까요?')">
-                <button class="px-3 py-1 bg-red-500 hover:bg-red-600 text-white rounded text-sm">삭제</button>
-            </form>
-        </div>
-        {% else %}
-        <div class="text-gray-500 text-center py-8">등록된 예약이 없습니다.</div>
-        {% endfor %}
-    </div>
+{% macro fields(prefix, s=none) %}
+<div class="schedule-fields">
+    <div class="field"><label for="{{ prefix }}-time">실행 시각</label><input id="{{ prefix }}-time" type="time" name="time" value="{{ s.time if s else '' }}" required></div>
+    <div class="field"><label for="{{ prefix }}-code">출석번호</label><input id="{{ prefix }}-code" name="code" value="{{ s.code if s else '' }}" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" placeholder="4자리 숫자" title="출석번호는 4자리 숫자로 입력해 주세요"></div>
+    <div class="field"><label for="{{ prefix }}-car">차량번호</label><input id="{{ prefix }}-car" name="car_no4" value="{{ s.car_no4 if s else '' }}" placeholder="1234 / 12가1234"></div>
+    {% for ttype in ticket_order %}{% if ttype in tickets %}
+    <div class="field"><label for="{{ prefix }}-{{ ttype }}">{{ tickets[ttype].label }} (장)</label><input id="{{ prefix }}-{{ ttype }}" type="number" name="tk_{{ ttype }}" min="0" max="{{ tickets[ttype].max }}" value="{{ s.tickets.get(ttype, 0) if s else 0 }}" required></div>
+    {% endif %}{% endfor %}
 </div>
-
-<script>
-function formatTimeInput(input) {
-    const digits = input.value.replace(/\D/g, '').slice(0, 4);
-    input.value = digits.length > 2 ? digits.slice(0, 2) + ':' + digits.slice(2) : digits;
-}
-
-function renderTicketBtn(btn) {
-    const input = btn.previousElementSibling;   // hidden tk_* input
-    const v = parseInt(input.value) || 0;
-    const label = btn.dataset.label;
-    btn.textContent = `${label} × ${v}`;   // 0 도 × 0 으로 — 유료권 칩과 표기·간격 통일
-    if (v > 0) {
-        btn.style.backgroundColor = btn.dataset.color;
-        btn.style.color = '#1f2937';
-        btn.style.borderColor = '#9ca3af';
-        btn.style.fontWeight = '600';
-    } else {
-        btn.style.backgroundColor = '';
-        btn.style.color = '';
-        btn.style.borderColor = '';
-        btn.style.fontWeight = '';
-        btn.classList.add('text-gray-500', 'dark:text-gray-400', 'border-gray-300', 'dark:border-gray-500');
-    }
-}
-
-function cycleTicket(btn) {
-    const input = btn.previousElementSibling;
-    const max = parseInt(btn.dataset.max) || 1;
-    let v = (parseInt(input.value) || 0) + 1;
-    if (v > max) v = 0;
-    input.value = v;
-    renderTicketBtn(btn);
-}
-
-function renderTicketBox(box) {
-    const input = box.querySelector('input');
-    let v = parseInt(input.value) || 0;
-    const max = parseInt(input.max) || 1;
-    if (v > max) v = max;
-    if (v < 0) v = 0;
-    // 상한 초과 고정 + "05" 처럼 앞에 남은 0 제거 (빈 칸은 blur 때 0으로 채움)
-    if (input.value !== '' && input.value !== String(v)) input.value = v;
-    // 자릿수만큼만 폭을 차지 — × 와 숫자 사이 간격이 자릿수와 무관하게 일정해진다
-    input.style.width = (Math.max(input.value.length, 1) + 0.7) + 'ch';
-    if (v > 0) {
-        box.style.backgroundColor = box.dataset.color;
-        box.style.color = '#1f2937';
-        box.style.borderColor = '#9ca3af';
-        box.style.fontWeight = '600';
-    } else {
-        box.style.backgroundColor = '';
-        box.style.color = '';
-        box.style.borderColor = '';
-        box.style.fontWeight = '';
-        box.classList.add('text-gray-500', 'dark:text-gray-400', 'border-gray-300', 'dark:border-gray-500');
-    }
-}
-
-document.querySelectorAll('.ticket-btn').forEach(renderTicketBtn);
-document.querySelectorAll('.ticket-box').forEach(renderTicketBox);
-</script>
-
-<style>
-/* 칩 안 숫자 입력칸의 스핀 버튼 제거 — 좁은 칸에서 화살표가 숫자를 가린다 */
-.ticket-num::-webkit-outer-spin-button,
-.ticket-num::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
-.ticket-num { -moz-appearance: textfield; appearance: textfield; }
-</style>
+<div class="schedule-days"><span class="hint">반복 요일</span>{% for label in day_labels %}<label><input type="checkbox" name="day_{{ loop.index0 }}" {% if not s or loop.index0 in s.days %}checked{% endif %}>{{ label }}</label>{% endfor %}</div>
+{% endmacro %}
+{% block content %}
+<div class="page-panel">
+    <div class="page-heading"><h2>예약 관리 <span class="count">{{ schedules | length }}개</span></h2><span class="hint">설정한 요일과 시각에 자동 실행</span></div>
+    <form action="/api/schedules" method="post" data-async-form class="form-card"><h3>새 예약 추가</h3>
+        {{ fields('new') }}
+        <div class="save-bar"><span class="hint">출석번호 또는 차량번호를 입력해 주세요.</span><button class="btn btn-primary">+ 예약 추가</button></div>
+        <p data-form-status role="alert" class="form-status"></p>
+    </form>
+    {% for s in schedules | sort(attribute='time') %}
+    <details class="schedule-card">
+        <summary class="schedule-summary"><div><strong>{{ s.time }}</strong> <span class="badge {{ 'badge-in' if s.enabled else 'badge-none' }}">{{ '사용 중' if s.enabled else '일시 중지' }}</span>
+            <p class="schedule-meta">{% for label in day_labels %}{% if loop.index0 in s.days %}{{ label }} {% endif %}{% endfor %} · {% if s.code %}출석 {{ s.code }}{% endif %}{% if s.code and s.car_no4 %} · {% endif %}{% if s.car_no4 %}차량 {{ s.car_no4 }}{% endif %}</p>
+            {% if s.car_no4 %}<p class="schedule-meta">{% for ttype in ticket_order %}{% if s.tickets.get(ttype, 0) %}{{ tickets[ttype].label }} {{ s.tickets[ttype] }}장 {% endif %}{% endfor %}</p>{% endif %}
+        </div><span class="btn">수정 ▾</span></summary>
+        <div class="schedule-editor">
+            <form action="/api/schedules/{{ s.id }}/edit" method="post" data-async-form>
+                {{ fields(s.id, s) }}
+                <div class="save-bar"><label class="schedule-toggle"><input type="checkbox" name="enabled" {% if s.enabled %}checked{% endif %}>예약 사용</label><button class="btn btn-primary">변경사항 저장</button><button type="button" class="btn" onclick="this.form.reset(); this.closest('details').open=false">취소</button></div>
+                <p data-form-status role="alert" class="form-status"></p>
+            </form>
+            <form action="/api/schedules/{{ s.id }}/delete" method="post" data-async-form data-confirm="{{ s.time }} 예약을 삭제할까요?" class="save-bar"><button class="btn btn-danger">예약 삭제</button><p data-form-status role="alert" class="form-status"></p></form>
+        </div>
+    </details>
+    {% else %}<p class="empty-state">등록된 예약이 없습니다. 위에서 첫 예약을 추가해 주세요.</p>{% endfor %}
+</div>
 {% endblock %}

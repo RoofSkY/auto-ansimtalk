@@ -16,7 +16,9 @@
     <title>{% block title %}등하원차량등록{% endblock %}</title>
     <!-- 로컬 번들 (인터넷 없이도 UI 동작) — 정적 CSS 는 dev\build_css.bat 로 재생성 -->
     <link rel="stylesheet" href="/static/tailwind.css?v={{ static_version }}">
+    <link rel="stylesheet" href="/static/ui.css?v={{ static_version }}">
     <script defer src="/static/alpine.min.js?v={{ static_version }}"></script>
+    <script defer src="/static/ui.js?v={{ static_version }}"></script>
     <style>
         body { font-family: 'Malgun Gothic', -apple-system, sans-serif; }
         .log-mono { font-family: Consolas, 'D2Coding', monospace; }
@@ -24,56 +26,37 @@
     </style>
 </head>
 <body class="bg-gray-100 text-gray-900 dark:bg-gray-900 dark:text-gray-100 min-h-screen">
-    <header class="bg-white dark:bg-gray-800 border-b dark:border-gray-700 px-6 py-3 flex items-center sticky top-0 z-10 relative">
-        <h1 class="text-xl font-bold">
-            <a href="/" class="hover:text-blue-500">등하원차량등록</a>
-        </h1>
-
-        <div id="header-clock"
-             class="absolute left-1/2 -translate-x-1/2 text-2xl font-bold tabular-nums tracking-wider">
-            --:--:--
-        </div>
-
-        <div class="flex-1"></div>
-
-        <nav class="flex gap-3 items-center">
-            <a href="/settings" title="설정"
-               class="px-3 py-1.5 hover:bg-gray-100 dark:hover:bg-gray-700 rounded text-xl leading-none">⚙️</a>
-            <button @click="dark = !dark" role="switch" :aria-checked="dark"
-                    :title="dark ? '라이트 모드로 전환' : '다크 모드로 전환'"
-                    class="relative inline-flex h-7 w-14 items-center rounded-full transition-colors"
-                    :class="dark ? 'bg-blue-600' : 'bg-gray-300'">
-                <span class="inline-block h-6 w-6 transform rounded-full bg-white shadow transition-transform text-sm leading-6 text-center"
-                      :class="dark ? 'translate-x-7' : 'translate-x-1'"
-                      x-text="dark ? '🌙' : '☀️'"></span>
-            </button>
+    <header class="app-header">
+        <h1><a href="/" class="brand"><span class="brand-mark" aria-hidden="true">↔</span>등하원차량등록</a></h1>
+        <nav class="app-nav" aria-label="주 메뉴">
+            {% for path, label in [('/', '메인'), ('/students', '입소자 관리'), ('/schedules', '예약 관리'), ('/settings', '설정')] %}
+            <a href="{{ path }}" {% if request.url.path == path or (path == '/settings' and request.url.path.startswith('/settings/')) %}aria-current="page"{% endif %}>{{ label }}</a>
+            {% endfor %}
         </nav>
+        <div class="header-tools">
+            <time id="header-clock" aria-label="현재 시각">--:--:--</time>
+            <button @click="dark = !dark" class="theme-button" :aria-label="dark ? '라이트 모드로 전환' : '다크 모드로 전환'"
+                    :title="dark ? '라이트 모드로 전환' : '다크 모드로 전환'" x-text="dark ? '☾' : '☀'"></button>
+        </div>
     </header>
-    <main class="p-4 max-w-screen-2xl mx-auto">
+    <main class="app-main">
         {% block content %}{% endblock %}
     </main>
 
-    <div x-data="vehicleToasts()" x-init="connect()"
-         class="fixed bottom-6 right-6 z-50 flex flex-col gap-4 items-end pointer-events-none">
+    <div x-data="vehicleToasts()" x-init="connect()" class="toast-stack" role="status" aria-live="polite">
         <template x-for="t in toasts" :key="t.id">
-            <div class="pointer-events-auto bg-white dark:bg-gray-800 border-l-8 rounded-2xl shadow-2xl px-8 py-6 min-w-[28rem] max-w-2xl"
-                 :class="t.kind === '입차' ? 'border-green-500' : 'border-orange-500'"
+            <div class="vehicle-toast" :class="{ departure: t.kind === '출차' }"
                  x-transition:enter="transition ease-out duration-300"
                  x-transition:enter-start="translate-x-full opacity-0"
                  x-transition:enter-end="translate-x-0 opacity-100"
                  x-transition:leave="transition ease-in duration-300"
                  x-transition:leave-start="translate-x-0 opacity-100"
                  x-transition:leave-end="translate-x-full opacity-0">
-                <div class="flex items-start gap-5">
-                    <span class="text-5xl leading-none" x-text="t.kind === '입차' ? '🚗' : '🅿️'"></span>
-                    <div class="flex-1 min-w-0">
-                        <div class="font-bold text-2xl" x-text="t.kind"></div>
-                        <div class="text-xl text-gray-600 dark:text-gray-300 truncate mt-1"
-                             x-text="t.name ? `${t.name} · ${t.car}` : t.car"></div>
-                    </div>
-                    <button @click="dismiss(t.id)"
-                            class="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 text-4xl leading-none">×</button>
+                <div>
+                    <strong x-text="t.kind"></strong>
+                    <p x-text="t.name ? `${t.name} · ${t.car}` : t.car"></p>
                 </div>
+                <button @click="dismiss(t.id)" aria-label="알림 닫기">×</button>
             </div>
         </template>
     </div>
@@ -98,13 +81,19 @@
         function open() {
             if (es) return;
             es = new EventSource('/stream');
+            es.onopen = () => window.dispatchEvent(new CustomEvent('connection', { detail: true }));
             es.onmessage = (e) => {
                 if (e.data.startsWith(':')) return;
                 let msg;
                 try { msg = JSON.parse(e.data); } catch { return; }
+                if (msg.type === 'data_restored' && location.pathname !== '/settings/backup') {
+                    location.reload();
+                    return;
+                }
                 window.dispatchEvent(new CustomEvent('sse', { detail: msg }));
             };
             es.onerror = () => {
+                window.dispatchEvent(new CustomEvent('connection', { detail: false }));
                 if (es) { es.close(); es = null; }
                 clearTimeout(timer);
                 timer = setTimeout(open, 3000);

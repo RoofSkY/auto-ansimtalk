@@ -1,42 +1,39 @@
 {% extends "base.html" %}
-{% block title %}원생 관리{% endblock %}
+{% block title %}입소자 관리{% endblock %}
 {% block content %}
-<div class="max-w-4xl mx-auto bg-white dark:bg-gray-800 rounded-lg shadow p-6">
-    <h2 class="text-xl font-bold mb-4">원생 관리</h2>
-
-    <form action="/api/students" method="post" class="mb-6 p-3 bg-gray-50 dark:bg-gray-700 rounded flex gap-2 items-end flex-wrap">
-        <div>
-            <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">이름</label>
-            <input name="name" required class="px-3 py-1.5 border rounded dark:bg-gray-600 dark:border-gray-500 w-32">
+<div class="page-panel" x-data="{ search: '' }">
+    <div class="page-heading"><h2>입소자 관리 <span class="count">{{ students | length }}명</span></h2><input class="search-field" type="search" x-model="search" aria-label="입소자 검색" placeholder="이름 · 출석번호 · 차량번호 검색"></div>
+    <form action="/api/students" method="post" data-async-form class="form-card">
+        <h3>새 입소자 추가</h3>
+        <div class="field-grid">
+            <div class="field"><label for="new-name">이름</label><input id="new-name" name="name" required placeholder="입소자 이름"></div>
+            <div class="field"><label for="new-code">출석번호</label><input id="new-code" name="code" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" placeholder="4자리 숫자" title="출석번호는 4자리 숫자로 입력해 주세요"></div>
+            <div class="field"><label for="new-cars">차량번호 <span class="hint">· 여러 대는 쉼표로 구분</span></label><input id="new-cars" name="cars" placeholder="1234, 12가5678"></div>
+            <button class="btn btn-primary">+ 입소자 추가</button>
         </div>
-        <div>
-            <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">출석번호</label>
-            <input name="code" class="px-3 py-1.5 border rounded dark:bg-gray-600 dark:border-gray-500 w-24">
-        </div>
-        <div class="flex-1 min-w-48">
-            <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">차량번호 (콤마로 여러 대, 중복 시 앞자리 포함)</label>
-            <input name="cars" placeholder="0000, 00가0000" class="w-full px-3 py-1.5 border rounded dark:bg-gray-600 dark:border-gray-500">
-        </div>
-        <button class="px-4 py-1.5 bg-blue-500 hover:bg-blue-600 text-white rounded">추가</button>
+        <p data-form-status role="status" class="form-status"></p>
     </form>
-
-    <div class="space-y-2">
-        {% for s in students %}
-        <div class="flex gap-2 items-center bg-gray-50 dark:bg-gray-700 rounded p-2">
-            <form action="/api/students/{{ s.id }}/edit" method="post" class="flex gap-2 items-center flex-1">
-                <input name="name" value="{{ s.name }}" class="px-2 py-1 border rounded dark:bg-gray-600 dark:border-gray-500 w-32">
-                <input name="code" value="{{ s.code }}" class="px-2 py-1 border rounded dark:bg-gray-600 dark:border-gray-500 w-24">
-                <input name="cars" value="{{ s.car_no4s | join(', ') }}" class="flex-1 px-2 py-1 border rounded dark:bg-gray-600 dark:border-gray-500">
-                <button class="px-3 py-1 bg-blue-500 hover:bg-blue-600 text-white rounded text-sm whitespace-nowrap">저장</button>
-            </form>
-            <form action="/api/students/{{ s.id }}/delete" method="post"
-                  onsubmit="return confirm('정말 삭제할까요?')">
-                <button class="px-3 py-1 bg-red-500 hover:bg-red-600 text-white rounded text-sm">삭제</button>
-            </form>
+    <div class="directory-head" aria-hidden="true"><span>이름</span><span>출석번호</span><span>차량번호</span><span>관리</span></div>
+    {% for s in students %}
+    <div x-data="{ editing: false }" data-search="{{ s.name }} {{ s.code }} {{ s.car_no4s | join(' ') }}" x-show="!search.trim() || $el.dataset.search.includes(search.trim())" class="directory-item">
+        <div class="directory-row" x-show="!editing">
+            <strong>{{ s.name }}</strong><span class="directory-code">{{ s.code or '미등록' }}</span><p class="directory-cars muted">{{ s.car_no4s | join(', ') or '차량 없음' }}</p>
+            <div class="button-row"><button class="btn" @click="editing = true; $nextTick(() => $refs.editName.focus())">수정</button>
+                <form action="/api/students/{{ s.id }}/delete" method="post" data-async-form data-confirm="{{ s.name }} 입소자를 삭제할까요?"><button class="btn btn-danger">삭제</button></form>
+            </div>
         </div>
-        {% else %}
-        <div class="text-gray-500 text-center py-8">등록된 원생이 없습니다.</div>
-        {% endfor %}
+        <form action="/api/students/{{ s.id }}/edit" method="post" data-async-form class="directory-edit" x-cloak x-show="editing">
+            <div class="field-grid">
+                <div class="field"><label for="name-{{ s.id }}">이름</label><input id="name-{{ s.id }}" name="name" value="{{ s.name }}" required x-ref="editName"></div>
+                <div class="field"><label for="code-{{ s.id }}">출석번호</label><input id="code-{{ s.id }}" name="code" value="{{ s.code }}" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" title="출석번호는 4자리 숫자로 입력해 주세요"></div>
+                <div class="field"><label for="cars-{{ s.id }}">차량번호</label><input id="cars-{{ s.id }}" name="cars" value="{{ s.car_no4s | join(', ') }}"></div>
+                <div class="edit-controls"><button class="btn btn-primary">저장</button><button class="btn" type="button" @click="$el.form.reset(); editing = false">취소</button></div>
+            </div>
+            <p data-form-status role="status" class="form-status"></p>
+        </form>
+        <p data-form-status data-row-status role="status" class="form-status"></p>
     </div>
+    {% else %}<p class="empty-state">등록된 입소자가 없습니다. 위에서 첫 입소자를 추가해 주세요.</p>{% endfor %}
+    <p class="empty-state" x-cloak x-show="search.trim() && !{{ students | tojson | forceescape }}.some(s => (s.name + ' ' + s.code + ' ' + (s.car_no4s || []).join(' ')).includes(search.trim()))">검색 결과가 없습니다.</p>
 </div>
 {% endblock %}

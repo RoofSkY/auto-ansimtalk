@@ -1,9 +1,9 @@
-"""안심톡 웹 포털(ansimtalk.gg.go.kr) 클라이언트 — 원생별 등하원 상태 조회.
+"""안심톡 웹 포털(ansimtalk.gg.go.kr) 클라이언트 — 입소자별 등하원 상태 조회.
 
 agent API(ansim.py)와 달리 웹 포털 로그인 세션이 필요하다.
 로그인 정보는 agent API 와 동일하게 config/ansimtalk.json 을 사용.
 
-- 원생 구분: 출결번호 (STDINFO-DATA-KEYPAD_NUM, 4자리)
+- 입소자 구분: 출결번호 (STDINFO-DATA-KEYPAD_NUM, 4자리)
 - 등하원 상태: STDINFO-DATA-ATTENDANCE_STATE
     ""=미등원, "1"=등원, "2"=하원, "3"=결석, "4"=공결, "5"=캠프
 """
@@ -125,7 +125,7 @@ def _fetch(session: requests.Session, day: str) -> list[dict]:
 
 
 def fetch_students(day: str | None = None) -> list[dict]:
-    """해당 날짜의 원생별 출결 정보 목록. 세션은 캐시하고 만료 시 재로그인."""
+    """해당 날짜의 입소자별 출결 정보 목록. 세션은 캐시하고 만료 시 재로그인."""
     global _session
     day = day or date.today().isoformat()
     with _lock:
