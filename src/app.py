@@ -522,7 +522,8 @@ def do_vehicle(student: dict, tickets: dict[str, int] | None = None,
         return
 
     for entry, in_car in parked:
-        car_target = f"{entry} {name}".strip()
+        car_number = in_car.get("carNumber") or entry
+        car_target = f"{car_number} {name}".strip()
         for ttype, count in tickets.items():
             ticket = iparking.TICKETS[ttype]
             try:

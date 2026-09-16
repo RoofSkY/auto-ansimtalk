@@ -1,4 +1,33 @@
 /* Text, controls and status colors are shared by every page. */
+.log-entry{width:100%;text-align:left;color:var(--ink);cursor:pointer;background:transparent}
+.log-entry:hover{background:var(--subtle)}
+.log-entry:focus-visible{outline-offset:-3px!important;border-radius:4px}
+body:has(.log-dialog[open]){overflow:hidden}
+.log-dialog{width:800px;max-width:calc(100vw - 32px);max-height:calc(100dvh - 32px);margin:auto;padding:0;border:1px solid var(--line);border-radius:16px;background:var(--surface);color:var(--ink);box-shadow:0 24px 80px #0004;overflow:hidden}
+.log-dialog[open]{display:flex;flex-direction:column}
+.log-dialog::backdrop{background:#0f172a80}
+.log-dialog-header{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:24px 30px;flex-shrink:0}
+.log-dialog-header h2{font-size:23px;font-weight:800}
+.log-dialog-close{width:36px;height:36px;flex-shrink:0;font-size:30px;line-height:1;color:var(--muted);border-radius:6px}
+.log-dialog-close:hover{background:var(--subtle)}
+.log-dialog-body{padding:8px 30px 20px;overflow:auto;min-height:0;overscroll-behavior:contain}
+.log-dialog-body:focus-visible{outline:2px solid var(--focus);outline-offset:-3px}
+.log-detail-result{display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-bottom:24px}
+.log-detail-result>svg{width:38px;height:38px;flex-shrink:0}
+.log-detail-result h3{font-size:23px;font-weight:800;overflow-wrap:anywhere}
+.log-result-badge{padding:4px 12px;border-radius:7px;font-size:13px;font-weight:700;white-space:nowrap}
+.log-result-badge.is-success{color:var(--green);background:var(--green-soft)}
+.log-result-badge.is-failure{color:var(--red);background:var(--red-soft)}
+.log-detail-meta{display:grid;grid-template-columns:100px minmax(0,1fr);gap:10px 20px;border-block:1px solid var(--line);padding:22px 0;margin-bottom:22px;font-size:15px}
+.log-detail-meta dt{color:var(--muted)}
+.log-detail-meta dd{font-weight:600;overflow-wrap:anywhere}
+.log-message-heading{font-size:16px;font-weight:700;margin-bottom:12px}
+.log-detail-message{background:var(--subtle);border-radius:10px;padding:18px;white-space:pre-wrap;overflow-wrap:anywhere;font-size:15px;line-height:1.85}
+.log-dialog-footer{display:flex;align-items:center;justify-content:flex-end;gap:12px;padding:18px 30px 24px;flex-shrink:0;flex-wrap:wrap}
+.log-dialog-footer .btn{min-height:42px;min-width:92px}
+.log-copy-status{flex:1;min-width:0;color:var(--muted);font-size:13px;overflow-wrap:anywhere}
+.log-copy-status.feedback-error{color:var(--red)}
+@media(max-width:600px){.log-dialog-header{padding:18px}.log-dialog-header h2{font-size:20px}.log-dialog-body{padding:4px 18px 16px}.log-detail-result h3{font-size:20px}.log-detail-meta{grid-template-columns:76px minmax(0,1fr);gap:10px}.log-dialog-footer{padding:16px 18px;gap:8px}.log-copy-status:not(:empty){flex-basis:100%}}
 :root{
   --canvas:#e9eef5;--surface:#fff;--subtle:#edf2f7;
   --line:#c4cfdd;--control-line:#718198;

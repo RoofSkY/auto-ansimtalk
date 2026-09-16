@@ -177,6 +177,18 @@ def main():
                         screenshot = call("Page.captureScreenshot", {"format": "png"})
                         (ROOT / "dev/test" / f"ui-{route.strip('/') or 'main'}-{width}.png").write_bytes(base64.b64decode(screenshot["data"]))
                         if route == "/":
+                            assert evaluate((ROOT / 'dev/test/check_log_dialog.js').read_text(encoding='utf-8'))
+                            for dark in (False, True):
+                                evaluate("Alpine.$data(document.documentElement).dark = " + json.dumps(dark))
+                                evaluate("document.querySelector('.log-entry').focus(); document.querySelector('.log-entry').click()")
+                                time.sleep(.05)
+                                report = evaluate((ROOT / 'dev/test/check_contrast.js').read_text(encoding='utf-8'))
+                                assert not report['failures'], (width, 'log dialog', dark, report)
+                                call('Input.dispatchKeyEvent', {'type': 'keyDown', 'key': 'Escape', 'code': 'Escape', 'windowsVirtualKeyCode': 27})
+                                call('Input.dispatchKeyEvent', {'type': 'keyUp', 'key': 'Escape', 'code': 'Escape', 'windowsVirtualKeyCode': 27})
+                                time.sleep(.05)
+                                assert evaluate("!document.querySelector('.log-dialog').open")
+                            evaluate("Alpine.$data(document.documentElement).dark = false")
                             assert evaluate("document.querySelector('.student-toolbar h2, .student-toolbar .count, .dashboard-status')") is None
                             assert evaluate("[...document.querySelector('.toolbar-main').children].map(e=>e.className)") == ['search-field','btn status-end','refresh-time','service-states']
                             if width > 760:

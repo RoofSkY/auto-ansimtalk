@@ -203,7 +203,8 @@
                 <button class="btn" x-cloak x-show="logsError && !logsLoading"
                     @click="loadLogs(logs.length > 0)">다시 불러오기</button>
 				<template x-for="log in filteredLogs" :key="log.id">
-					<article class="log-entry">
+					<button type="button" class="log-entry" @click="openLog(log)"
+                        aria-haspopup="dialog" :aria-label="log.displayTarget + ' · ' + log.displayType + ' · ' + log.time + ' 상세 보기'">
 						<time class="log-time" x-text="log.time"></time>
 						<span
 							class="log-status"
@@ -214,7 +215,7 @@
                                 <use :href="'#log-icon-' + log.iconIndex"></use>
                             </svg>
 						</span>
-						<div class="log-summary" :title="log.time + ' · ' + log.displayTarget + ' · ' + log.displayType + ' · ' + log.message">
+						<span class="log-summary" :title="log.time + ' · ' + log.displayTarget + ' · ' + log.displayType + ' · ' + log.message">
 							<span
 								class="log-target"
 								x-text="log.displayTarget"></span>
@@ -223,8 +224,8 @@
 								class="log-message"
 								:class="{ 'feedback-error': !log.ok }"
 								x-text="log.displayType + ' · ' + log.message"></span>
-						</div>
-					</article>
+						</span>
+					</button>
 				</template>
 				<div
 					x-cloak
@@ -238,6 +239,43 @@
 				x-text="autoScroll ? '● 새 기록 자동 따라가기' : '이전 기록을 보고 있습니다'"></div>
 		</section>
 	</div>
+    <dialog x-ref="logDialog" class="log-dialog" aria-labelledby="log-detail-title"
+        @close="finishLogClose()">
+        <header class="log-dialog-header">
+            <h2 id="log-detail-title">처리 기록 상세</h2>
+            <button type="button" class="log-dialog-close" aria-label="닫기"
+                @click="$refs.logDialog.close()" autofocus>×</button>
+        </header>
+        <div class="log-dialog-body" x-ref="logDetailBody" tabindex="0" aria-label="처리 기록 내용">
+            <div class="log-detail-result">
+                <svg viewBox="0 0 24 24" aria-hidden="true"
+                    :class="{ 'log-success': selectedLog?.iconIndex === 4, 'log-failure': selectedLog?.iconIndex === 5 }">
+                    <use :href="'#log-icon-' + (selectedLog?.iconIndex ?? 4)"></use>
+                </svg>
+                <h3 x-text="selectedLog ? logDetailTitle(selectedLog) : ''"></h3>
+                <span class="log-result-badge" :class="selectedLog?.ok ? 'is-success' : 'is-failure'"
+                    x-text="selectedLog?.ok ? '성공' : '실패'"></span>
+            </div>
+            <dl class="log-detail-meta">
+                <dt>대상</dt><dd x-text="selectedLog?.displayTarget || '—'"></dd>
+                <dt x-show="selectedLog?.vehicleLabel !== null">차량번호</dt>
+                <dd x-show="selectedLog?.vehicleLabel !== null" class="log-detail-vehicle"
+                    x-text="selectedLog?.vehicleLabel || '기록 없음'"></dd>
+                <dt>처리 구분</dt><dd x-text="selectedLog?.displayType || '—'"></dd>
+                <dt>발생 시각</dt><dd x-text="selectedLog ? [selectedLog.date, selectedLog.time].filter(Boolean).join(' ') : ''"></dd>
+            </dl>
+            <h3 class="log-message-heading">전체 메시지</h3>
+            <div class="log-detail-message" x-text="selectedLog?.message || '메시지가 없습니다.'"></div>
+        </div>
+        <footer class="log-dialog-footer">
+            <p class="log-copy-status" role="status" :class="{ 'feedback-error': copyFailed }" x-text="copyStatus"></p>
+            <button type="button" class="btn btn-outline" @click="copyLog()" :disabled="copyingLog">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="8" y="8" width="12" height="13" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h3"/></svg>
+                <span x-text="copyingLog ? '복사 중…' : '내용 복사'"></span>
+            </button>
+            <button type="button" class="btn btn-primary" @click="$refs.logDialog.close()">닫기</button>
+        </footer>
+    </dialog>
 </div>
 
 <script>
@@ -287,6 +325,11 @@
             logGeneration: 0,
             pendingLogs: [],
             logFrame: null,
+            selectedLog: null,
+            copyStatus: '',
+            copyFailed: false,
+            copyingLog: false,
+            logDetailVersion: 0,
 	        inCars: new Set({{ in_cars | tojson }}),
             ticketCounts: {{ ticket_counts | default({}) | tojson }},
 	        attStatus: {{ att_status | tojson }},
@@ -423,11 +466,66 @@
 	            return (s.code || '').trim() || (s.name || '').trim();
 	        },
 
+            openLog(log) {
+                this.selectedLog = { ...log, date: log.date || this.logsDate };
+                this.logDetailVersion++;
+                this.copyStatus = '';
+                this.copyFailed = false;
+                this.copyingLog = false;
+                this.$refs.logDialog.showModal();
+                this.$refs.logDetailBody.scrollTop = 0;
+            },
+
+            finishLogClose() {
+                this.logDetailVersion++;
+                this.selectedLog = null;
+                this.copyStatus = '';
+                this.copyingLog = false;
+                if (document.activeElement === document.body) {
+                    this.$root.querySelector('.log-tab.active')?.focus({ preventScroll: true });
+                }
+            },
+
+            logDetailTitle(log) {
+                const action = ['차량등록', '차량등록(예약)'].includes(log.type)
+                    ? '주차권 등록' : ['입차', '출차', '등원', '하원'].includes(log.icon)
+                    ? log.icon : log.displayType;
+                return action + (log.ok ? ' 완료' : ' 실패');
+            },
+
+            async copyLog() {
+                if (!this.selectedLog || this.copyingLog) return;
+                const log = this.selectedLog, version = this.logDetailVersion;
+                const vehicle = log.vehicleLabel !== null ? `차량번호: ${log.vehicleLabel || '기록 없음'}\n` : '';
+                const text = `대상: ${log.displayTarget}\n${vehicle}처리 구분: ${log.displayType}\n발생 시각: ${[log.date, log.time].filter(Boolean).join(' ')}\n결과: ${log.ok ? '성공' : '실패'}\n\n${log.message || ''}`;
+                this.copyingLog = true;
+                this.copyStatus = '';
+                this.copyFailed = false;
+                try {
+                    await navigator.clipboard.writeText(text);
+                    if (version === this.logDetailVersion) this.copyStatus = '내용을 복사했습니다.';
+                } catch {
+                    if (version === this.logDetailVersion) {
+                        this.copyFailed = true;
+                        this.copyStatus = '복사하지 못했습니다. 다시 시도해 주세요.';
+                    }
+                } finally {
+                    if (version === this.logDetailVersion) this.copyingLog = false;
+                }
+            },
+
             prepareLog(log) {
                 const icon = this.logIcon(log);
                 return { ...log, id: log.id || crypto.randomUUID(), icon,
                     iconIndex: ['입차', '출차', '등원', '하원', '성공', '실패'].indexOf(icon),
-                    displayTarget: this.logTarget(log), displayType: this.logType(log) };
+                    displayTarget: this.logTarget(log), displayType: this.logType(log),
+                    vehicleLabel: this.logVehicle(log) };
+            },
+
+            logVehicle(log) {
+                if (!['차량등록', '차량등록(예약)'].includes(log.type)) return null;
+                const match = (log.target || '').trim().match(/^([0-9가-힣]*\d{4}(?:\s*,\s*[0-9가-힣]*\d{4})*)(?:\s+|$)/);
+                return match ? match[1].split(',').map(value => value.trim()).join(', ') : '';
             },
 
             compareLogs(a, b) {

@@ -144,6 +144,21 @@ class TicketPollingTests(unittest.TestCase):
         self.assertIn('1234', self.m.state.prev_in_cars)
         self.assertIsNone(self.m.state.ticket_counts.snapshot()['1234']['count'])
 
+    def test_registration_logs_use_resolved_full_plate(self):
+        student = {**self.m.state.students[0], 'car_no4s': ['1234']}
+        for result in ((True, 'ok'), (False, 'rejected'), RuntimeError('offline')):
+            for tag in ('차량등록', '차량등록(예약)'):
+                with self.subTest(result=result, tag=tag):
+                    with patch.object(iparking, 'find_in_car', return_value=self.cars['1234'][0]):
+                        with patch.object(iparking, 'apply_discount') as apply:
+                            if isinstance(result, Exception):
+                                apply.side_effect = result
+                            else:
+                                apply.return_value = result
+                            with patch.object(self.m, 'emit_log') as emit:
+                                self.m.do_vehicle(student, tickets={'free': 1}, tag=tag)
+                                self.assertEqual(emit.call_args.args[1], '11가1234 Example')
+
     def test_partial_registration_requests_fresh_server_count(self):
         student = {**self.m.state.students[0], 'car_no4s': ['1234']}
         self.m._poll_once()
