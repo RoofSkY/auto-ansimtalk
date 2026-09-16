@@ -29,6 +29,7 @@ GLOBS = [
     "static/backup.css",
     "static/backup.js",
     "static/app.ico",
+    "static/tray.svg",
     "sound/*",
 ]
 
