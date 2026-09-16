@@ -49,7 +49,6 @@ except ImportError:
     _SOUND_AVAILABLE = False
 
 
-# ---------- 경로 ----------
 HERE = Path(__file__).resolve().parent.parent
 CONFIG_DIR = HERE / "config"
 CONFIG_DIR.mkdir(exist_ok=True)
@@ -64,7 +63,6 @@ STATIC_DIR.mkdir(exist_ok=True)
 SOUND_DIR = HERE / "sound"
 
 
-# ---------- 기본 설정 ----------
 DEFAULT_CONFIG = {
     "auto_search": True,
     "vehicle_toast": True,
@@ -83,7 +81,6 @@ DEFAULT_VEHICLE_TICKET = "free"  # 차량등록 버튼이 쓰는 권종
 PORT = 5000
 
 
-# ---------- 차량번호 파서 ----------
 def _parse_car_entry(s: str) -> tuple[str, str] | None:
     s = (s or "").strip()
     if len(s) < 4:
@@ -95,7 +92,6 @@ def _parse_car_entry(s: str) -> tuple[str, str] | None:
     return last4, full
 
 
-# ---------- 데이터 로드/저장 ----------
 def _student_sort_key(s: dict) -> str:
     return (s.get("name") or "").strip()
 
@@ -213,7 +209,6 @@ def load_today_logs() -> list[dict]:
     return log_store.all()
 
 
-# ---------- 전역 상태 ----------
 class State:
     def __init__(self):
         self.students = load_students()
@@ -227,6 +222,7 @@ class State:
         # 입출차 판정 기준이 잡힌 차량 — 처음 확인된 차량은 알림 없이 기준만 잡는다
         self.poll_baseline: set[str] = set()
         self._poll_failing = False  # 차량 조회 실패 상태 — 로그를 주기마다 반복하지 않기 위함
+        self.poll_errors: dict[str, str] = {}
         self._att_failing = False   # 등하원 동기화 실패 상태 (동일)
         self.service_health = {"ansim": None, "iparking": None}
         self.last_refresh = ""
@@ -275,7 +271,6 @@ def _background_read(fn):
     return wrapped
 
 
-# ---------- 이벤트 발행 (스레드 → SSE) ----------
 def emit_event(event_type: str, payload: dict) -> None:
     """백그라운드 스레드 → asyncio 루프로 안전하게 메시지 전달."""
     if state.main_loop is None:
@@ -313,7 +308,6 @@ def emit_log(kind: str, target: str, message: str, ok: bool,
     emit_event("log", entry)
 
 
-# ---------- 등하원 상태 ----------
 def _reset_att_if_new_day() -> None:
     today = date.today().isoformat()
     if state.att.get("date") != today:
@@ -352,7 +346,6 @@ def set_att_status(key: str, status: str,
     })
 
 
-# ---------- 사운드 재생 ----------
 def _play_sound(filename: str) -> None:
     if not _SOUND_AVAILABLE:
         return
@@ -363,7 +356,6 @@ def _play_sound(filename: str) -> None:
         pass
 
 
-# ---------- 입출차 알림 (Windows 기본 알림, 트레이 미지원 시 웹 알림) ----------
 def _notify_vehicle(kind: str, name: str, car: str) -> None:
     if not state.config.get("vehicle_toast", True):
         return
@@ -384,9 +376,8 @@ def _notify_vehicle(kind: str, name: str, car: str) -> None:
     })
 
 
-# ---------- 액션 (백그라운드 스레드에서 실행) ----------
-def _trigger_refresh(*tasks: str, if_stale: bool = False) -> None:
-    refresh_manager.request(tasks, if_stale=if_stale)
+def _trigger_refresh(*tasks: str, if_stale: bool = False, vehicle_suffixes=None) -> None:
+    refresh_manager.request(tasks, if_stale=if_stale, vehicle_suffixes=vehicle_suffixes)
 
 
 action_runner = ActionRunner(
@@ -394,6 +385,7 @@ action_runner = ActionRunner(
     lambda exc: emit_log("시스템", "작업", f"처리 오류: {exc}", False),
 )
 _attendance_lock = threading.Lock()
+_vehicle_poll_lock = threading.Lock()
 _iparking_account_changing = False
 
 
@@ -404,7 +396,7 @@ def _manual_parking_begin(plate):
 
 def _manual_parking_finish(plate):
     state.ticket_counts.finish({plate[-4:]})
-    _trigger_refresh("vehicle")
+    _trigger_refresh("vehicle", vehicle_suffixes={plate[-4:]})
 
 
 manual_parking = ManualParking(action_runner, emit_log, _manual_parking_begin, _manual_parking_finish)
@@ -440,7 +432,7 @@ def _start_action(student: dict, action: str, *, tickets=None, tag=None,
                     do_vehicle(student, tickets, tag or "차량등록")
                 finally:
                     state.ticket_counts.finish(suffixes)
-                    _trigger_refresh("vehicle")
+                    _trigger_refresh("vehicle", vehicle_suffixes=suffixes)
         finally:
             if after:
                 after(started)
@@ -541,28 +533,35 @@ def do_vehicle(student: dict, tickets: dict[str, int] | None = None,
     for entry, in_car in parked:
         car_number = in_car.get("carNumber") or entry
         car_target = f"{car_number} {name}".strip()
+        options = None
+        if any(count > 1 for count in tickets.values()):
+            try:
+                options = {t['key']: t for t in iparking.manual_vehicle(in_car)['tickets']}
+            except Exception as exc:
+                emit_log(tag, car_target, f"등록 가능 수량 조회 실패: {exc}", False)
+                continue
         for ttype, count in tickets.items():
             ticket = iparking.TICKETS[ttype]
             try:
-                ok, msg = iparking.apply_discount(in_car, ttype, count=count)
-                ok_count = count if ok else 0
-                if not ok and count > 1:
-                    # 벌크가 거부되면 1장씩 폴백 — 잔여가 요청보다 적은 경우 등
-                    # 넣을 수 있는 만큼은 넣고 몇 장에서 막혔는지 남긴다
-                    for _ in range(count):
-                        ok1, msg = iparking.apply_discount(in_car, ttype)
-                        if not ok1:
-                            break
-                        ok_count += 1
-                    ok = ok_count == count
+                if options is None:
+                    amount, kwargs = count, {}
+                else:
+                    option = options[ttype]
+                    amount = min(count, option['max'])
+                    kwargs = {'ticket': option['ticket']}
+                if amount == 0:
+                    emit_log(tag, car_target, f"{ticket['label']} {count}매 - 등록 가능한 수량이 없습니다.", False)
+                    continue
+                ok, msg = iparking.apply_discount(in_car, ttype, count=amount, **kwargs)
+                ok_count = amount if ok else 0
                 done = f"{ok_count}/{count}" if 0 < ok_count < count else f"{count}"
                 summary = f"{ticket['label']} {done}매 - {msg}"
-                emit_log(tag, car_target, summary, ok)
+                emit_log(tag, car_target, summary, ok and ok_count == count)
             except Exception as e:
-                emit_log(tag, car_target, f"{ticket['label']} 오류: {e}", False)
+                emit_log(tag, car_target, f"{ticket['label']} 결과 확인 필요: {e} — 등록 내역을 확인해 주세요.", False)
+                return
 
 
-# ---------- 백그라운드 루프 ----------
 _loop_error_seen: dict[str, tuple[str, float]] = {}
 _LOOP_ERROR_REPEAT_SEC = 300
 
@@ -599,9 +598,9 @@ def _refresh_att():
         return False
 
 
-def _refresh_vehicle():
+def _refresh_vehicle(suffixes=None):
     try:
-        return _poll_once()
+        return _poll_once(suffixes)
     except Exception as e:
         _set_service_health("iparking", False)
         _log_loop_error("차량 검색", e)
@@ -652,7 +651,7 @@ def _report_att_health(ok: bool, reason: str) -> None:
         emit_log("시스템", "등하원동기화", "조회 정상 복구", True)
 
 
-def _report_poll_health(failed: int, total: int, errors: dict[str, Exception]) -> None:
+def _report_poll_health(failed: int, total: int, errors: dict[str, str]) -> None:
     """차량 조회 실패를 상태가 바뀔 때만 1회 알린다.
 
     실패를 조용히 삼키면(자격증명 만료·서버 점검 등) 자동 검색이 무기한 먹통이어도
@@ -664,7 +663,7 @@ def _report_poll_health(failed: int, total: int, errors: dict[str, Exception]) -
         reason = ""
         if errors:
             e = next(iter(errors.values()))
-            reason = f" — {type(e).__name__}: {e}"[:200]
+            reason = f" — {e}"[:200]
         emit_log("시스템", "차량검색", f"조회 실패 {failed}/{total}{reason}", False)
     elif not failed and state._poll_failing:
         state._poll_failing = False
@@ -672,12 +671,21 @@ def _report_poll_health(failed: int, total: int, errors: dict[str, Exception]) -
 
 
 @_background_read
-def _poll_once():
-    ticket_token = state.ticket_counts.token()
+def _poll_once(suffixes=None):
+    with _vehicle_poll_lock:
+        return _poll_vehicle(suffixes)
+
+
+def _poll_vehicle(suffixes):
+    with _data_lock:
+        if _iparking_account_changing:
+            return False
+        students = state.students
+        ticket_token = state.ticket_counts.token()
     entry_to_student: dict[str, dict] = {}
     entry_to_full: dict[str, str] = {}
     by_last4: dict[str, list[str]] = {}
-    for s in state.students:
+    for s in students:
         for c in s.get("car_no4s", []):
             p = _parse_car_entry(c)
             if not p:
@@ -686,7 +694,13 @@ def _poll_once():
             entry_to_student[c] = s
             entry_to_full[c] = full
             by_last4.setdefault(last4, []).append(c)
-    tracked = set(entry_to_student.keys())
+    all_tracked = set(entry_to_student)
+    all_suffixes = set(by_last4)
+    if suffixes is not None:
+        by_last4 = {key: entries for key, entries in by_last4.items() if key in suffixes}
+        if not by_last4:
+            return True
+    tracked = {entry for entries in by_last4.values() for entry in entries}
 
     errors: dict[str, Exception] = {}
 
@@ -702,7 +716,6 @@ def _poll_once():
             errors[last4] = e
             return None
 
-    # last4 별 순차 조회는 입소자 수에 비례해 느려짐 (~0.5초×N) — 병렬로 단축
     last4_list = list(by_last4.keys())
     with ThreadPoolExecutor(max_workers=8) as ex:
         results = dict(zip(last4_list, ex.map(_query, last4_list)))
@@ -710,7 +723,7 @@ def _poll_once():
     # 조회에 실패한 차량은 이번 주기 입출차 판정에서 제외하고 직전 상태를 유지한다.
     # (네트워크 순단·서버 점검 때 가짜 출차/입차가 무더기로 발생하는 것을 방지)
     unknown: set[str] = {e for l4, r in results.items() if r is None for e in by_last4[l4]}
-    observed = tracked - unknown  # 이번 주기에 상태를 실제로 확인한 차량
+    observed = tracked - unknown
     current: set[str] = set()
     matches = {}
     for last4, entries in by_last4.items():
@@ -725,23 +738,8 @@ def _poll_once():
                 match = cars[0]
             if match:
                 current.add(entry)
-                state.last_seen_plate[entry] = match.get("carNumber") or entry
                 matches[entry] = match
 
-    # 번호 4자리/전체 번호로 중복 등록한 차량도 입차 이력별 한 번만 조회한다.
-    histories = {str(car["parkingHistoryId"]): car for car in matches.values()
-                 if car.get("parkingHistoryId") is not None and car.get("parkingHistoryId") != ""}
-
-    def _count(item):
-        history_id, car = item
-        try:
-            return history_id, iparking.get_applied_ticket_count(car)
-        except Exception as exc:
-            errors[f"ticket:{history_id}"] = exc
-            return history_id, None
-
-    with ThreadPoolExecutor(max_workers=8) as ex:
-        counts = dict(ex.map(_count, histories.items()))
     ticket_rows = {}
     for entry in tracked:
         if entry in unknown:
@@ -751,37 +749,64 @@ def _poll_once():
         else:
             history_id = matches[entry].get("parkingHistoryId")
             history_id = str(history_id) if history_id is not None else None
-            ticket_rows[entry] = {"history_id": history_id, "count": counts.get(history_id)}
-            if not history_id:
-                errors[f"ticket:{entry}"] = iparking.IparkingError("차량 식별자(parkingHistoryId) 없음")
-    if not state.ticket_counts.update(ticket_rows, ticket_token):
-        return False
-    _report_poll_health(len(errors), len(last4_list) + len(matches), errors)
+            ticket_rows[entry] = {"history_id": history_id, "count": None}
 
-    # 기준(baseline)은 차량별로 잡는다. 전체가 성공해야 기준을 잡는 방식이면
-    # 특정 차량 하나만 계속 실패해도 입출차 알림이 영영 발생하지 않는다.
-    # 처음 확인된 차량은 이번 주기에 조용히 기준만 잡고(가짜 입차 방지),
-    # 이미 기준이 있는 차량만 입차/출차로 판정한다.
-    judged = state.poll_baseline & observed
-    entered = (current & judged) - state.prev_in_cars
-    exited = (state.prev_in_cars & judged) - current
-    for entry in entered:
-        s = entry_to_student.get(entry) or {}
-        name = s.get("name", "")
-        full_name = state.last_seen_plate.get(entry, entry)
-        emit_log("입차", name, full_name, True)
-        _notify_vehicle("입차", name, full_name)
-    for entry in exited:
-        s = entry_to_student.get(entry) or {}
-        name = s.get("name", "")
-        full_name = state.last_seen_plate.get(entry, entry)
-        emit_log("출차", name, full_name, True)
-        _notify_vehicle("출차", name, full_name)
+    # 입출차는 상세 수량 조회를 기다리지 않는다. 같은 입차 건의 수량만 잠시 유지한다.
+    with _data_lock:
+        if _iparking_account_changing or state.students is not students:
+            return False
+        previous = state.ticket_counts.snapshot()
+        early_rows = {entry: dict(info) for entry, info in ticket_rows.items()}
+        for entry, info in early_rows.items():
+            old = previous.get(entry, {})
+            if info['history_id'] and info['history_id'] == old.get('history_id'):
+                info['count'] = old.get('count')
+        if not state.ticket_counts.update(early_rows, ticket_token, partial=suffixes is not None):
+            return False
+        for entry, car in matches.items():
+            state.last_seen_plate[entry] = car.get("carNumber") or entry
+        judged = state.poll_baseline & observed
+        entered = (current & judged) - state.prev_in_cars
+        exited = (state.prev_in_cars & judged) - current
+        untouched = (state.prev_in_cars - tracked) & all_tracked if suffixes is not None else set()
+        state.poll_baseline = (state.poll_baseline | observed) & all_tracked
+        state.prev_in_cars = untouched | current | (state.prev_in_cars & unknown)
+        emit_event("in_cars", _vehicle_snapshot())
+        for kind, entries in (("입차", entered), ("출차", exited)):
+            for entry in entries:
+                name = entry_to_student[entry].get("name", "")
+                full_name = state.last_seen_plate.get(entry, entry)
+                emit_log(kind, name, full_name, True)
+                _notify_vehicle(kind, name, full_name)
 
-    # 이번에 확인된 차량은 다음 주기부터 판정 대상. 등록이 사라진 차량은 정리.
-    state.poll_baseline = (state.poll_baseline | observed) & tracked
-    state.prev_in_cars = current | (state.prev_in_cars & unknown)
-    emit_event("in_cars", _vehicle_snapshot())
+    histories = {str(car["parkingHistoryId"]): car for car in matches.values()
+                 if car.get("parkingHistoryId") is not None and car.get("parkingHistoryId") != ""}
+
+    def _count(item):
+        history_id, car = item
+        try:
+            return history_id, iparking.get_applied_ticket_count(car), None
+        except Exception as exc:
+            return history_id, None, exc
+
+    with ThreadPoolExecutor(max_workers=8) as ex:
+        counts = {history: (count, error) for history, count, error in ex.map(_count, histories.items())}
+    for entry, car in matches.items():
+        history = ticket_rows[entry]['history_id']
+        count, error = counts.get(history, (None, iparking.IparkingError("차량 식별자(parkingHistoryId) 없음")))
+        ticket_rows[entry]['count'] = count
+        if error:
+            errors[_parse_car_entry(entry)[0]] = error
+    with _data_lock:
+        if _iparking_account_changing or state.students is not students:
+            return False
+        if not state.ticket_counts.update(ticket_rows, ticket_token, partial=suffixes is not None):
+            return False
+        state.poll_errors = {key: error for key, error in state.poll_errors.items()
+                             if key in all_suffixes and key not in by_last4} if suffixes is not None else {}
+        state.poll_errors.update({key: f"{type(error).__name__}: {error}" for key, error in errors.items()})
+        _report_poll_health(len(state.poll_errors), len(all_suffixes), state.poll_errors)
+        emit_event("in_cars", _vehicle_snapshot())
     return not errors
 
 
@@ -939,7 +964,6 @@ def _scheduler_tick() -> None:
             # 대기열이 가득 찬 경우 다음 틱에서 다시 접수한다.
 
 
-# ---------- 폼 파싱 ----------
 def _parse_schedule_form(form) -> dict:
     time_s = (form.get("time") or "").strip()
     code = (form.get("code") or "").strip()
@@ -976,8 +1000,6 @@ def _parse_schedule_form(form) -> dict:
         if n < 0:
             return {"error": "매수는 0 이상"}
         if n > 0:
-            # 권종의 최대 적용 매수를 넘으면 잘라낸다 — 넘긴 채 두면 예약 실행 때
-            # 초과분부터 등록이 실패해 "k/N매" 부분 성공 로그만 남는다
             tickets[ttype] = min(n, iparking.TICKETS[ttype]["max"])
 
     if car and not tickets:
@@ -992,7 +1014,6 @@ def _parse_schedule_form(form) -> dict:
     }
 
 
-# ---------- FastAPI ----------
 def _auto_update_check():
     """서버 시작 시 1회 — 새 릴리스가 있으면 자동 업데이트 후 재시작."""
     time.sleep(3)  # 서버가 뜬 뒤에 실행 (업데이트 로그가 UI에 보이도록)
@@ -1064,7 +1085,6 @@ templates.env.globals["static_version"] = _static_version()
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 
-# ---------- 보안 (로컬 전용 앱 보호) ----------
 _ALLOWED_HOSTS = {"127.0.0.1", "localhost", "::1"}
 
 
@@ -1111,7 +1131,6 @@ async def _local_only_guard(request: Request, call_next):
     return response
 
 
-# ---------- 페이지 ----------
 @app.get("/", response_class=HTMLResponse)
 def index(request: Request):
     _reset_att_if_new_day()
@@ -1196,7 +1215,6 @@ def settings_page(request: Request):
     })
 
 
-# ---------- 백업 및 복원 ----------
 def _backup_summary():
     automatic = []
     for path in sorted((CONFIG_DIR / "backups").glob("before-restore-*.json"), reverse=True)[:10]:
@@ -1345,7 +1363,6 @@ def automatic_backup(name: str):
         "Content-Disposition": f'attachment; filename="{name}"', "Cache-Control": "no-store"})
 
 
-# ---------- 액션 API ----------
 def _find_student(sid: str) -> dict | None:
     """안정 식별자로 입소자 조회.
 
@@ -1473,11 +1490,11 @@ def set_student_status(sid: str, status: str = Form(...)):
     return {"ok": True}
 
 
-# ---------- 입소자 CRUD ----------
 def _commit_students(students: list[dict]) -> None:
     """저장 후 state 를 새 리스트로 교체하고, 열려 있는 화면에 변경을 알린다."""
     state.students = save_students(students)
     emit_event("students_changed", {})
+    _trigger_refresh("vehicle")
 
 
 @app.post("/api/students")
@@ -1517,7 +1534,6 @@ def delete_student(sid: str):
     return RedirectResponse("/students", status_code=303)
 
 
-# ---------- 예약 CRUD ----------
 @app.post("/api/schedules")
 async def add_schedule(request: Request):
     return await asyncio.to_thread(_save_schedule_form, await request.form())
@@ -1558,7 +1574,6 @@ def delete_schedule(sid: str):
     return RedirectResponse("/schedules", status_code=303)
 
 
-# ---------- 시스템 ----------
 @app.get("/health")
 async def health():
     return {"ok": True}
@@ -1575,7 +1590,6 @@ async def shutdown():
     return {"ok": True}
 
 
-# ---------- 설정 ----------
 @app.post("/api/settings")
 async def update_settings(request: Request):
     return await asyncio.to_thread(_save_settings_form, await request.form())
@@ -1641,7 +1655,6 @@ async def update_autostart(enabled: str = Form("")):
     return {"ok": True, "enabled": autostart.is_enabled()}
 
 
-# ---------- 계정 / 세션 ----------
 @app.post("/api/settings/ansim")
 async def update_ansim_account(user_id: str = Form(""), password: str = Form("")):
     """안심톡 계정 저장. 비밀번호가 비어 있으면 기존 값 유지."""
@@ -1751,7 +1764,6 @@ async def update_iparking_account(store_id: str = Form(""), user_id: str = Form(
     return _settings_saved("아이파킹 계정")
 
 
-# ---------- SSE ----------
 @app.get("/stream")
 async def event_stream(request: Request):
     q: asyncio.Queue = asyncio.Queue(maxsize=200)
@@ -1788,7 +1800,6 @@ async def event_stream(request: Request):
     return StreamingResponse(gen(), media_type="text/event-stream")
 
 
-# ---------- 진입점 ----------
 def _server_already_running() -> bool:
     try:
         req = urllib.request.Request(f"http://127.0.0.1:{PORT}/health")

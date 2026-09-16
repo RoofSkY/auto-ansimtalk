@@ -386,7 +386,6 @@
 	                if (msg.type === 'actions') {
 	                    this.applyActions(msg.data);
 	                } else if (msg.type === 'log') {
-	                    // 시간순 위치에 삽입 — 과거 시각의 보정 로그가 맨 아래에 붙지 않도록
 	                    this.enqueueLog(msg.data);
                 } else if (msg.type === 'students_changed') {
 	                    fetch('/api/students/list')
@@ -523,8 +522,9 @@
             },
 
             logVehicle(log) {
-                if (!['차량등록', '차량등록(예약)', '차량취소'].includes(log.type)) return null;
-                const match = (log.target || '').trim().match(/^([0-9가-힣]*\d{4}(?:\s*,\s*[0-9가-힣]*\d{4})*)(?:\s+|$)/);
+                if (!['차량등록', '차량등록(예약)', '차량취소', '입차', '출차'].includes(log.type)) return null;
+                const vehicleSource = ['입차', '출차'].includes(log.type) ? log.message : log.target;
+                const match = (vehicleSource || '').trim().match(/^([0-9가-힣]*\d{4}(?:\s*,\s*[0-9가-힣]*\d{4})*)(?:\s+|$)/);
                 return match ? match[1].split(',').map(value => value.trim()).join(', ') : '';
             },
 
@@ -726,8 +726,6 @@
 	        },
 
 	        async syncAtt() {
-	            // 상태 필터 탭 클릭 시 등하원 상태만 즉시 갱신 — 최신 상태로 분류되도록.
-	            // 연타해도 서버의 wake 이벤트가 진행 중 갱신 1회로 합쳐 준다.
 	            try {
 	                await fetch('/api/refresh?scope=att&if_stale=true', { method: 'POST' });
 	            } catch (e) {}

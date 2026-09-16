@@ -1,4 +1,3 @@
-/* Text, controls and status colors are shared by every page. */
 .log-entry{width:100%;text-align:left;color:var(--ink);cursor:pointer;background:transparent}
 .log-entry:hover{background:var(--subtle)}
 .log-entry:focus-visible{outline-offset:-3px!important;border-radius:4px}

@@ -313,5 +313,62 @@ class CancelProtocolTests(unittest.TestCase):
                 self.assertEqual(api.call_count, len(responses))
 
 
+class ParkingResponseTests(unittest.TestCase):
+    def test_ambiguous_write_responses_do_not_trigger_auth_retry(self):
+        for path in ('bulk-apply', 'bulk-cancel'):
+            for status, content_type in ((200, 'text/html'), (502, 'text/html'), (503, 'application/json')):
+                response = Mock(status_code=status, headers={'Content-Type': content_type})
+                with self.subTest(path=path, status=status), \
+                        patch.object(iparking, 'ensure_session'), \
+                        patch.object(iparking, '_auth_headers', return_value={}), \
+                        patch.object(iparking, '_request', return_value=response) as request, \
+                        patch.object(iparking, '_renew_session') as renew:
+                    with self.assertRaises(iparking.IparkingError):
+                        iparking._api('POST', '/tickets/' + path, json_body={})
+                    request.assert_called_once()
+                    renew.assert_not_called()
+
+    def test_server_error_after_apply_is_unknown_and_not_retried(self):
+        for status in (408, 500, 502, 503):
+            valid = Mock(ok=True, status_code=200, headers={})
+            uncertain = Mock(ok=False, status_code=status, headers={})
+            with self.subTest(status=status), patch.object(iparking, '_plid', return_value='lot'), \
+                    patch.object(iparking, '_api', side_effect=[valid, uncertain]) as api:
+                with self.assertRaises(iparking.IparkingError):
+                    iparking.apply_discount(CAR, 'paid', 100, ticket={'discountId': 'paid-id'})
+                self.assertEqual(api.call_count, 2)
+
+    def test_inventory_reuses_exact_stock_ids_including_disabled_tickets(self):
+        detail = copy.deepcopy(DETAIL)
+        free, paid = detail['enableAllocatedTicketInfoList']
+        free['availableApplyCount'] = 0
+        detail['enableAllocatedTicketInfoList'] = [paid]
+        detail['disableAllocatedTicketInfoList'] = [free]
+        catalog = {'FREE': free, 'PAID': paid}
+        with patch.object(iparking, 'get_vehicle_detail', return_value=detail), \
+                patch.object(iparking, '_tickets_by_class', catalog), \
+                patch.object(iparking, '_api', side_effect=AssertionError('No extra inventory request')):
+            view = iparking.manual_vehicle(CAR)
+            self.assertEqual(view['tickets'][0]['max'], 0)
+            self.assertEqual([t['remaining'] for t in view['inventory']], [128, 42])
+
+    def test_incomplete_or_different_stock_ids_require_inventory_fallback(self):
+        for change in ('missing', 'different_id', 'unknown', 'conflict'):
+            detail = copy.deepcopy(DETAIL)
+            catalog = {t['discountClassification']: copy.deepcopy(t)
+                       for t in detail['enableAllocatedTicketInfoList']}
+            if change == 'missing':
+                detail['enableAllocatedTicketInfoList'].pop()
+            elif change == 'different_id':
+                detail['enableAllocatedTicketInfoList'][0]['discountId'] = 'unrelated-free'
+            elif change == 'unknown':
+                detail['enableAllocatedTicketInfoList'][0]['remainingQuantity'] = None
+            else:
+                detail['disableAllocatedTicketInfoList'] = [{**detail['enableAllocatedTicketInfoList'][0], 'remainingQuantity': 9}]
+            with self.subTest(change=change), patch.object(iparking, 'get_vehicle_detail', return_value=detail), \
+                    patch.object(iparking, '_tickets_by_class', catalog):
+                self.assertIsNone(iparking.manual_vehicle(CAR)['inventory'])
+
+
 if __name__ == '__main__':
     unittest.main()

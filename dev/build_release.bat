@@ -7,7 +7,6 @@ REM   .venv\Scripts\python.exe -m pip install pyinstaller
 REM NOTE: keep this file ASCII-only (cmd.exe mis-parses multibyte chars in .bat)
 cd /d "%~dp0.."
 
-REM Prefer the project venv when present (dev machines), else fall back to PATH.
 set "PY=python"
 if exist ".venv\Scripts\python.exe" set "PY=.venv\Scripts\python.exe"
 echo Using interpreter: %PY%

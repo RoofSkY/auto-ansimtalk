@@ -41,7 +41,6 @@ _API_LIST = f"https://api.github.com/repos/{GITHUB_REPO}/releases?per_page=10"
 _TIMEOUT = 10
 
 
-# ---------- 토큰 / HTTP ----------
 def _get_token() -> str:
     tok = os.environ.get("GITHUB_TOKEN", "").strip()
     if tok:
@@ -85,7 +84,6 @@ def _urlopen(req: urllib.request.Request, timeout: float):
     return resp
 
 
-# ---------- 버전 비교 ----------
 def parse_version(s: str) -> tuple[int, ...]:
     """'v1.2.3' / '1.2' 형식을 비교 가능한 튜플로. 파싱 불가 시 (0,)."""
     m = re.match(r"v?(\d+(?:\.\d+)*)", (s or "").strip())
@@ -100,7 +98,6 @@ def is_newer(latest_tag: str, current: str = __version__) -> bool:
     return a + (0,) * (n - len(a)) > b + (0,) * (n - len(b))
 
 
-# ---------- 릴리스 조회 ----------
 def _fetch_latest_release_data() -> dict:
     """releases/latest 는 pre-release 를 제외하므로, 404 면 목록에서 최신 것을 사용."""
     try:
@@ -174,7 +171,6 @@ def _friendly_error(e: Exception) -> str:
     return f"업데이트 확인 실패: {s}"
 
 
-# ---------- 다운로드 / 적용 ----------
 def _download_zip(release: dict, dest: Path, progress=None) -> Path:
     """릴리스 zip 다운로드. 토큰이 있으면 API asset URL(사설 저장소용) 사용."""
     if _get_token():
@@ -306,7 +302,6 @@ def download_and_apply(release: dict, log=print) -> None:
     restart_app()
 
 
-# ---------- 시작 시 자동 업데이트 ----------
 def _load_state() -> dict:
     try:
         with open(UPDATE_STATE_PATH, encoding="utf-8") as f:

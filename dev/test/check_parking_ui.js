@@ -7,11 +7,16 @@
         {key:'paid', label:'1시간 유료권', remaining:42, max:42}];
     const car = {plate:'123가6595', history_id:'visit-1', entered_at:'2026-09-16 13:20'};
     let registrations = 0, cancellations = 0, lostResponse = false, operation = '등록';
+    let inventoryReads = 0, detailInventory = true, holdInventory = false, releaseInventory;
     window.fetch = async (url, options = {}) => {
         if (!String(url).startsWith('/api/parking/')) return originalFetch(url, options);
         const path = new URL(url, location.href);
         let data;
-        if (path.pathname.endsWith('/inventory')) data = tickets;
+        if (path.pathname.endsWith('/inventory')) {
+            inventoryReads++;
+            data = tickets;
+            if (holdInventory) await new Promise(resolve => { releaseInventory = resolve; });
+        }
         else if (path.pathname.endsWith('/search')) {
             data = path.searchParams.get('number') === '0000' ? [] : [car, {...car, plate:'55나6595', history_id:'visit-2'}];
         } else if (path.pathname.endsWith('/detail')) {
@@ -19,7 +24,8 @@
                 token:'token-' + registrations + '-' + cancellations, minutes:142, applied:[
                     {key:'applied-id', label:'1시간 무료권', count:1 + registrations - cancellations,
                         cancel_max:1 + registrations - cancellations, other_store:false},
-                    {key:null, label:'다른 무료권', count:1, cancel_max:0, other_store:true}], tickets};
+                    {key:null, label:'다른 무료권', count:1, cancel_max:0, other_store:true}], tickets,
+                inventory:detailInventory ? tickets : null};
         } else if (path.pathname.endsWith('/register')) {
             const payload = JSON.parse(options.body);
             assert(payload.counts.free === 1 && payload.counts.paid === 0, 'explicit quantity submitted');
@@ -59,11 +65,16 @@
         assert(app.canRegister, 'valid count enables registration');
         await app.register();
         assert(registrations === 1 && app.totalApplied === 3 && !app.busy, 'register and reload actual applied count');
+        assert(inventoryReads === 1, 'detail stock reuses inventory without another request after registration');
         assert(app.counts.free === 0 && !app.canRegister, 'completed quantity is reset');
         lostResponse = true;
         app.counts.free = 1;
         await app.register();
         assert(registrations === 2 && app.result.state === 'success', 'lost POST response recovered without resend');
+        detailInventory = false;
+        await app.selectCar(car);
+        assert(inventoryReads === 2 && app.inventory[1].remaining === 42, 'incomplete detail stock falls back to inventory endpoint');
+        detailInventory = true;
         await tick();
         const cancelButtons = [...document.querySelectorAll('.parking-cancel-button')].filter(b => !b.hidden);
         assert(cancelButtons.length === 1, 'only own store ticket shows cancel button');
@@ -83,6 +94,7 @@
         await tick();
         await app.cancelTicket();
         assert(cancellations === 1 && app.totalApplied === 3 && app.result.state === 'success', 'cancel response loss recovered once and applied count reloaded');
+        assert(inventoryReads === 2, 'cancel detail also avoids duplicate inventory request');
         const input = document.querySelector('#parking-number');
         input.value = '1234';
         input.dispatchEvent(new Event('input', {bubbles:true}));
@@ -104,6 +116,15 @@
         app.setCount({key:'paid',max:100}, quantity);
         assert(quantity.value === '100' && app.counts.paid === 100, 'typed quantity never exceeds 100');
         app.counts.paid = 0;
+        holdInventory = true;
+        const oldInventory = app.refreshInventory();
+        await tick();
+        app.applyVehicle({...app.selected, inventory:tickets.map(t => ({...t, remaining:77}))});
+        releaseInventory();
+        await oldInventory;
+        assert(app.inventory[0].remaining === 77, 'older inventory response cannot overwrite fresh detail stock');
+        holdInventory = false;
+        app.applyVehicle({...app.selected, inventory:tickets});
         await tick();
         const bounds = dialog.getBoundingClientRect();
         assert(bounds.left >= 0 && bounds.right <= innerWidth && bounds.bottom <= innerHeight, 'modal fits viewport');

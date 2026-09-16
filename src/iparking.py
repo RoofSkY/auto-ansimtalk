@@ -79,7 +79,6 @@ class IparkingError(RuntimeError):
     """로그인/설정 등 복구 불가한 오류."""
 
 
-# ---------- 세션(HTTP) ----------
 # keep-alive 연결 재사용 — 차량 검색은 워커 8개로 병렬 실행되고, 그 와중에
 # 차량등록 버튼이나 예약이 겹치면 기본 풀(10개)을 넘겨 초과 연결이 버려진다.
 # 그러면 요청마다 TLS 핸드셰이크를 새로 해 사이클이 눈에 띄게 느려진다.
@@ -281,6 +280,10 @@ def _api(method: str, path: str, *, params=None, json_body=None, _retried=False)
         params=params,
         data=json.dumps(json_body) if json_body is not None else None,
     )
+    mutation = method.upper() == "POST" and path.endswith(("/bulk-apply", "/bulk-cancel"))
+    if mutation and (res.status_code >= 500 or res.status_code == 408
+                     or (res.status_code not in (401, 403) and _is_expired(res))):
+        raise IparkingError("처리 응답을 확정할 수 없습니다. 등록 내역을 확인해 주세요.")
     if not _retried and _is_expired(res):
         _renew_session(seen_gen)
         return _api(method, path, params=params, json_body=json_body, _retried=True)
@@ -292,7 +295,6 @@ def _plid() -> str:
     return _auth["plid"]
 
 
-# ---------- 권종(할인권) 조회 ----------
 def _load_store_tickets(force: bool = False) -> dict[str, dict]:
     """스토어 보유 할인권을 classification(FREE/PAID) 별로 캐시."""
     global _tickets_by_class
@@ -313,7 +315,6 @@ def _load_store_tickets(force: bool = False) -> dict[str, dict]:
     return _tickets_by_class
 
 
-# ---------- 차량 조회 ----------
 def find_in_cars(car_no4: str) -> list[dict]:
     """입차 차량 목록 (각 항목의 전체 번호판은 carNumber)."""
     res = _api("GET", f"/api/v1/stores/completions/{_plid()}/in/{car_no4}")
@@ -429,10 +430,29 @@ def manual_vehicle(in_car: dict) -> dict:
                         "remaining": remaining, "max": maximum, "ticket": ticket})
     return {"plate": data["carNumber"], "history_id": str(in_car["parkingHistoryId"]),
             "entered_at": data.get("inCarDateTime") or in_car.get("inCarDateTime") or "",
-            "minutes": _quantity(data.get("totalInParkingTime")), "applied": applied, "tickets": tickets}
+            "minutes": _quantity(data.get("totalInParkingTime")), "applied": applied, "tickets": tickets,
+            "inventory": _inventory_from_detail(enabled + disabled)}
 
 
-# ---------- 할인권 적용 ----------
+def _inventory_from_detail(rows):
+    """보유 목록에서 확인한 권종 ID의 잔여 수량만 상세 응답에서 재사용한다."""
+    catalog = _tickets_by_class
+    inventory = []
+    for key, spec in TICKETS.items():
+        stock = catalog.get(spec['classification'], {})
+        discount_id = stock.get('discountId')
+        matches = [row for row in rows if discount_id and row.get('discountId') == discount_id
+                   and row.get('discountClassification') == spec['classification']]
+        if not matches:
+            return None
+        amounts = {_quantity(row.get('remainingQuantity')) for row in matches}
+        if None in amounts or len(amounts) != 1:
+            return None
+        inventory.append({'key': key, 'label': matches[0].get('discountName') or stock.get('discountName') or spec['label'],
+                          'remaining': amounts.pop()})
+    return inventory
+
+
 def _result_message(res: requests.Response) -> str:
     """응답의 서버 메시지. 성공은 본문 resultMessage, 실패는 Result-Message 헤더.
 
@@ -506,6 +526,8 @@ def apply_discount(in_car: dict, ticket_type: str = DEFAULT_TICKET,
         f"/api/v1/stores/discounts/{plid}/discount-tickets/tickets/bulk-apply",
         json_body=abody,
     )
+    if ares.status_code >= 500 or ares.status_code == 408:
+        raise IparkingError("등록 응답을 확정할 수 없습니다. 등록 내역을 확인해 주세요.")
     if ares.ok and ares.headers.get("result-code") in (None, "0000"):
         return True, _result_message(ares) or "등록 성공"
     return False, _result_message(ares) or _apply_error_message(ares)
@@ -558,7 +580,6 @@ def _apply_error_message(res: requests.Response) -> str:
     return f"등록 실패 (result-code={rc}, HTTP {res.status_code})"
 
 
-# ---------- CLI ----------
 def register(car_no4: str, ticket_type: str = DEFAULT_TICKET, count: int = 1) -> None:
     car_no4 = car_no4.strip()
     if not (car_no4.isdigit() and len(car_no4) == 4):

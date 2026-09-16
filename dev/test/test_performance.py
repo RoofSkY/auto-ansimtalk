@@ -14,6 +14,81 @@ from schedule_queue import ScheduleQueue
 
 
 class RefreshTests(unittest.TestCase):
+    def manager(self, vehicle):
+        manager = RefreshCoordinator({'vehicle': vehicle, 'att': lambda: None},
+                                     lambda: 60, lambda kind: False, lambda seconds: None,
+                                     lambda *args: None)
+        self.addCleanup(manager.stop)
+        return manager
+
+    def test_partial_requests_merge_and_full_request_takes_precedence(self):
+        for requests, expected in (([{'1234'}, {'5678'}, {'1234'}], {'1234', '5678'}),
+                                   ([{'1234'}, None, {'5678'}], None)):
+            calls, done = [], threading.Event()
+            def vehicle(suffixes=None):
+                calls.append(suffixes)
+                done.set()
+            manager = self.manager(vehicle)
+            for suffixes in requests:
+                manager.request({'vehicle'}, vehicle_suffixes=suffixes)
+            manager.start()
+            self.assertTrue(done.wait(1))
+            with manager.condition:
+                self.assertTrue(manager.condition.wait_for(lambda: not manager.running, 1))
+            self.assertEqual(calls, [expected])
+            manager.stop()
+
+    def test_partial_requested_during_full_read_runs_after_it(self):
+        entered, release, second = threading.Event(), threading.Event(), threading.Event()
+        calls = []
+        def vehicle(suffixes=None):
+            calls.append(suffixes)
+            if len(calls) == 1:
+                entered.set()
+                release.wait(3)
+            else:
+                second.set()
+        manager = self.manager(vehicle)
+        manager.request({'vehicle'})
+        manager.start()
+        try:
+            self.assertTrue(entered.wait(1))
+            manager.request({'vehicle'}, vehicle_suffixes={'1234'})
+            manager.request({'vehicle'}, vehicle_suffixes={'5678'})
+            self.assertEqual(calls, [None])
+            release.set()
+            self.assertTrue(second.wait(1))
+            self.assertEqual(calls, [None, {'1234', '5678'}])
+        finally:
+            release.set()
+
+    def test_periodic_full_refresh_waits_for_running_partial_without_being_skipped(self):
+        entered, release, full = threading.Event(), threading.Event(), threading.Event()
+        calls = []
+        def vehicle(suffixes=None):
+            calls.append(suffixes)
+            if suffixes is not None:
+                entered.set()
+                release.wait(3)
+            else:
+                full.set()
+        manager = self.manager(vehicle)
+        manager.request({'vehicle'}, vehicle_suffixes={'1234'})
+        manager.start()
+        try:
+            self.assertTrue(entered.wait(1))
+            with manager.condition:
+                manager.enabled = lambda kind: kind == 'vehicle'
+                manager.deadline = 0
+                manager.condition.notify_all()
+                self.assertTrue(manager.condition.wait_for(lambda: 'vehicle' in manager.pending, 1))
+            self.assertFalse(full.is_set())
+            release.set()
+            self.assertTrue(full.wait(1))
+            self.assertEqual(calls, [{'1234'}, None])
+        finally:
+            release.set()
+
     def test_slow_attendance_does_not_block_vehicle_and_requests_coalesce(self):
         entered, release, vehicle, rerun = (threading.Event() for _ in range(4))
         calls = []

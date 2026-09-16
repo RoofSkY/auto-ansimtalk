@@ -1,5 +1,6 @@
 import json
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
@@ -87,12 +88,26 @@ class TicketStateTests(unittest.TestCase):
         self.assertFalse(state.update({'1234': {'history_id': 'old', 'count': 2}}, token))
         self.assertEqual(state.snapshot(), {})
 
+    def test_partial_update_preserves_other_vehicles_and_old_mutation_guard(self):
+        state = TicketCounts()
+        state.update({'1234': {'history_id': 'a', 'count': 2},
+                      '5678': {'history_id': 'b', 'count': 3}}, state.token())
+        old = state.token()
+        state.begin({'1234'})
+        state.finish({'1234'})
+        state.update({'1234': {'history_id': 'a', 'count': 1}}, old, partial=True)
+        self.assertIsNone(state.snapshot()['1234']['count'])
+        self.assertEqual(state.snapshot()['5678']['count'], 3)
+        state.update({'1234': {'history_id': 'a', 'count': 1}}, state.token(), partial=True)
+        self.assertEqual(state.snapshot()['1234']['count'], 1)
+
 
 class TicketPollingTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.m = load_isolated_app(self.tmp.name)
+        self.addCleanup(self.m.action_runner.close)
         self.m.state.students = [{'id': 'a', 'name': 'Example', 'code': '',
                                   'car_no4s': ['1234', '11가1234', '5678']}]
         self.cars = {'1234': [{'parkingHistoryId': 'visit-a', 'carNumber': '11가1234'}], '5678': []}
@@ -163,16 +178,176 @@ class TicketPollingTests(unittest.TestCase):
         student = {**self.m.state.students[0], 'car_no4s': ['1234']}
         self.m._poll_once()
         with patch.object(iparking, 'find_in_car', return_value=self.cars['1234'][0]):
-            with patch.object(iparking, 'apply_discount', side_effect=[(False, 'bulk'), (True, 'ok'), (False, 'limit')]):
+            with patch.object(iparking, 'manual_vehicle', return_value={'tickets': [
+                    {'key': 'free', 'max': 1, 'ticket': {'discountId': 'free'}}]}), \
+                    patch.object(iparking, 'apply_discount', return_value=(True, 'ok')) as apply:
                 with patch.object(self.m, '_trigger_refresh') as refresh:
                     self.assertTrue(self.m._start_action(student, 'vehicle', tickets={'free': 2}))
                     self.m.action_runner._queues['vehicle'].join()
-                    refresh.assert_called_with('vehicle')
+                    refresh.assert_called_with('vehicle', vehicle_suffixes={'1234'})
+                    apply.assert_called_once()
+                    self.assertEqual(apply.call_args.kwargs['count'], 1)
         self.assertIsNone(self.m.state.ticket_counts.snapshot()['1234']['count'])
         self.count = 1
         self.m._poll_once()
         self.assertEqual(self.m.state.ticket_counts.snapshot()['1234']['count'], 1)
         self.m.action_runner.close()
+
+    def test_targeted_refresh_preserves_other_cars_and_updates_all_aliases(self):
+        self.cars['5678'] = [{'parkingHistoryId': 'b', 'carNumber': '22나5678'}]
+        self.m._poll_once()
+        iparking.find_in_cars.reset_mock()
+        self.fetch_count.reset_mock()
+        self.m._notify_vehicle.reset_mock()
+        self.count = 7
+        self.m._poll_once({'1234'})
+        iparking.find_in_cars.assert_called_once_with('1234')
+        self.fetch_count.assert_called_once()
+        rows = self.m.state.ticket_counts.snapshot()
+        self.assertEqual([rows[k]['count'] for k in ('1234', '11가1234', '5678')], [7, 7, 2])
+        self.assertIn('5678', self.m.state.prev_in_cars)
+        self.m._notify_vehicle.assert_not_called()
+        self.cars['1234'] = []
+        self.m._poll_once({'1234'})
+        self.assertEqual(self.m.state.prev_in_cars, {'5678'})
+
+    def test_untracked_manual_vehicle_does_not_refresh_resident_list(self):
+        self.m._poll_once({'9999'})
+        iparking.find_in_cars.assert_not_called()
+        self.fetch_count.assert_not_called()
+        with patch.object(self.m, '_trigger_refresh') as refresh:
+            self.m._manual_parking_finish('22나9999')
+            refresh.assert_called_once_with('vehicle', vehicle_suffixes={'9999'})
+
+    def test_thirty_vehicle_refresh_reduces_45_reads_to_two_for_one_target(self):
+        self.m.state.students = [{'id': str(i), 'name': 'Example', 'car_no4s': [str(1000 + i)]}
+                                 for i in range(30)]
+        self.cars = {str(1000 + i): [{'parkingHistoryId': str(i), 'carNumber': '11가' + str(1000 + i)}]
+                     if i < 15 else [] for i in range(30)}
+        self.m._poll_once()
+        self.assertEqual(iparking.find_in_cars.call_count + self.fetch_count.call_count, 45)
+        iparking.find_in_cars.reset_mock()
+        self.fetch_count.reset_mock()
+        self.count = 4
+        self.m._poll_once({'1000'})
+        self.assertEqual(iparking.find_in_cars.call_count + self.fetch_count.call_count, 2)
+        self.assertEqual(len(self.m.state.ticket_counts.snapshot()), 30)
+        self.assertEqual(self.m.state.ticket_counts.snapshot()['1001']['count'], 2)
+
+    def test_student_edit_during_query_cannot_restore_removed_vehicle(self):
+        def search(number):
+            self.m.state.students = []
+            return self.cars[number]
+        iparking.find_in_cars.side_effect = search
+        self.assertFalse(self.m._poll_once({'1234'}))
+        self.assertEqual(self.m.state.prev_in_cars, set())
+        self.assertEqual(self.m.state.ticket_counts.snapshot(), {})
+        self.fetch_count.assert_not_called()
+
+    def test_entry_notification_and_green_row_precede_slow_ticket_query(self):
+        self.m._poll_once()
+        self.cars['5678'] = [{'parkingHistoryId': 'b', 'carNumber': '22나5678'}]
+        entered, release = threading.Event(), threading.Event()
+        self.fetch_count.side_effect = lambda car: (entered.set(), release.wait(3), 4)[-1]
+        worker = threading.Thread(target=self.m._poll_once, args=({'5678'},))
+        worker.start()
+        try:
+            self.assertTrue(entered.wait(1))
+            self.assertIn('5678', self.m.state.prev_in_cars)
+            self.m._notify_vehicle.assert_called_once_with('입차', 'Example', '22나5678')
+            self.assertIsNone(self.m.state.ticket_counts.snapshot()['5678']['count'])
+        finally:
+            release.set()
+            worker.join(3)
+        self.assertEqual(self.m.state.ticket_counts.snapshot()['5678']['count'], 4)
+        self.m._poll_once({'5678'})
+        self.assertEqual(self.m._notify_vehicle.call_count, 1)
+
+    def test_full_and_partial_reads_are_serialized_and_old_counts_stay_invalid(self):
+        self.m._poll_once()
+        entered, release, second_done = threading.Event(), threading.Event(), threading.Event()
+        self.fetch_count.side_effect = lambda car: (entered.set(), release.wait(3), 2)[-1]
+        first = threading.Thread(target=self.m._poll_once)
+        first.start()
+        second = threading.Thread(target=lambda: (self.m._poll_once({'1234'}), second_done.set()))
+        try:
+            self.assertTrue(entered.wait(1))
+            self.m.state.ticket_counts.begin({'1234'})
+            self.m.state.ticket_counts.finish({'1234'})
+            second.start()
+            self.assertFalse(second_done.wait(.05))
+            self.fetch_count.side_effect = lambda car: 5
+        finally:
+            release.set()
+            first.join(3)
+            if second.ident:
+                second.join(3)
+        self.assertTrue(second_done.is_set())
+        self.assertEqual(self.m.state.ticket_counts.snapshot()['1234']['count'], 5)
+
+    def test_partial_success_does_not_clear_other_vehicle_failure(self):
+        def search(number):
+            if number == '5678':
+                raise RuntimeError('offline')
+            return self.cars[number]
+        iparking.find_in_cars.side_effect = search
+        self.m._poll_once()
+        self.m._poll_once({'1234'})
+        self.assertFalse(self.m.state.service_health['iparking'])
+        self.assertIn('5678', self.m.state.poll_errors)
+        iparking.find_in_cars.side_effect = lambda number: self.cars[number]
+        self.m._poll_once({'5678'})
+        self.assertTrue(self.m.state.service_health['iparking'])
+
+    def test_account_reset_discards_search_result_before_notification(self):
+        self.m._poll_once()
+        self.m._notify_vehicle.reset_mock()
+        def search(number):
+            self.m.state.ticket_counts.clear()
+            return []
+        iparking.find_in_cars.side_effect = search
+        self.assertFalse(self.m._poll_once({'1234'}))
+        self.m._notify_vehicle.assert_not_called()
+        self.assertEqual(self.m.state.ticket_counts.snapshot(), {})
+
+    def test_bulk_request_uses_available_count_once_and_reports_partial_success(self):
+        student = {**self.m.state.students[0], 'car_no4s': ['1234']}
+        with patch.object(iparking, 'manual_vehicle', return_value={'tickets': [
+                {'key': 'paid', 'max': 42, 'ticket': {'discountId': 'paid'}}]}), \
+                patch.object(iparking, 'apply_discount', return_value=(True, 'ok')) as apply, \
+                patch.object(self.m, 'emit_log') as log:
+            self.m.do_vehicle(student, {'paid': 100})
+            apply.assert_called_once_with(self.cars['1234'][0], 'paid', count=42, ticket={'discountId': 'paid'})
+            self.assertIn('42/100', log.call_args.args[2])
+            self.assertFalse(log.call_args.args[3])
+
+    def test_bulk_rejection_is_not_retried_and_free_limit_keeps_paid_request(self):
+        student = {**self.m.state.students[0], 'car_no4s': ['1234']}
+        for free_max in (0, 2):
+            with self.subTest(free_max=free_max), \
+                    patch.object(iparking, 'manual_vehicle', return_value={'tickets': [
+                        {'key': 'free', 'max': free_max, 'ticket': {'discountId': 'free'}},
+                        {'key': 'paid', 'max': 100, 'ticket': {'discountId': 'paid'}}]}), \
+                    patch.object(iparking, 'apply_discount', side_effect=lambda car, kind, **kw: (kind == 'paid', 'result')) as apply:
+                self.m.do_vehicle(student, {'free': 2, 'paid': 100})
+                self.assertEqual(apply.call_count, 2 if free_max else 1)
+                self.assertEqual(apply.call_args.args[1], 'paid')
+                self.assertEqual(apply.call_args.kwargs['count'], 100)
+
+    def test_uncertain_registration_stops_without_retry_or_other_ticket_write(self):
+        student = {**self.m.state.students[0], 'car_no4s': ['1234']}
+        with patch.object(iparking, 'manual_vehicle', return_value={'tickets': [
+                {'key': 'free', 'max': 2, 'ticket': {'discountId': 'free'}},
+                {'key': 'paid', 'max': 100, 'ticket': {'discountId': 'paid'}}]}), \
+                patch.object(iparking, 'apply_discount', side_effect=TimeoutError('lost')) as apply:
+            self.m.do_vehicle(student, {'free': 2, 'paid': 100})
+            apply.assert_called_once()
+
+    def test_unknown_available_count_prevents_registration(self):
+        with patch.object(iparking, 'manual_vehicle', side_effect=iparking.IparkingError('unknown')), \
+                patch.object(iparking, 'apply_discount') as apply:
+            self.m.do_vehicle(self.m.state.students[0], {'paid': 100})
+            apply.assert_not_called()
 
 
 if __name__ == '__main__':

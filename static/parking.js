@@ -2,7 +2,7 @@ function parkingDesk() {
     return {
         inventory: [], cars: [], selected: null, query: '', counts: {free: 0, paid: 0},
         loading: false, inventoryLoading: false, busy: false, error: '', inventoryError: '',
-        result: null, generation: 0, timer: null, pending: null, cancellation: null,
+        result: null, generation: 0, timer: null, pending: null, cancellation: null, inventoryGeneration: 0,
         init() {
             try { this.pending = JSON.parse(sessionStorage.getItem('manual-parking-request')); } catch {}
             if (this.pending?.token) { this.busy = true; this.poll(); }
@@ -39,13 +39,26 @@ function parkingDesk() {
                 }
             });
         },
-        async refreshInventory() {
-            if (this.inventoryLoading) return;
+        async refreshInventory(force = false) {
+            if (this.inventoryLoading && !force) return;
+            const generation = ++this.inventoryGeneration;
             this.inventoryLoading = true;
             this.inventoryError = '';
-            try { this.inventory = await this.api('inventory'); }
-            catch (error) { this.inventory = []; this.inventoryError = error.message; }
-            finally { this.inventoryLoading = false; }
+            try {
+                const inventory = await this.api('inventory');
+                if (generation === this.inventoryGeneration) this.inventory = inventory;
+            } catch (error) {
+                if (generation === this.inventoryGeneration) { this.inventory = []; this.inventoryError = error.message; }
+            } finally { if (generation === this.inventoryGeneration) this.inventoryLoading = false; }
+        },
+        applyVehicle(view) {
+            this.selected = view;
+            this.inventoryGeneration++;
+            this.inventoryLoading = false;
+            if (!Array.isArray(view.inventory)) return false;
+            this.inventory = view.inventory;
+            this.inventoryError = '';
+            return true;
         },
         async search() {
             if (this.busy || this.loading) return;
@@ -77,9 +90,7 @@ function parkingDesk() {
             try {
                 const view = await this.api('detail?' + new URLSearchParams({plate: car.plate, history: car.history_id}));
                 if (generation !== this.generation) return;
-                this.selected = view;
-                this.inventory = view.tickets;
-                this.inventoryError = '';
+                if (!this.applyVehicle(view)) await this.refreshInventory();
             } catch (error) { if (generation === this.generation) this.error = error.message; }
             finally { if (generation === this.generation) { this.loading = false; this.restoreFocus(); } }
         },
@@ -178,10 +189,12 @@ function parkingDesk() {
                 this.loading = true;
                 try {
                     const view = await this.api('detail?' + new URLSearchParams({plate: pending.plate, history: pending.history_id}));
-                    this.selected = view; this.inventory = view.tickets; this.inventoryError = '';
-                } catch (error) { this.error = '처리 후 조회: ' + error.message; }
+                    if (!this.applyVehicle(view)) await this.refreshInventory();
+                } catch (error) {
+                    this.error = '처리 후 조회: ' + error.message;
+                    await this.refreshInventory(true);
+                }
                 finally { this.loading = false; this.restoreFocus(); }
-                await this.refreshInventory();
             } catch (error) {
                 this.error = error.message;
                 if (error.status === 404) {

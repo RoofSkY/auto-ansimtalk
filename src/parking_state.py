@@ -34,12 +34,12 @@ class TicketCounts:
                 self.versions[suffix] = self.versions.get(suffix, 0) + 1
                 self.active[suffix] = max(0, self.active.get(suffix, 0) - 1)
 
-    def update(self, rows, token):
+    def update(self, rows, token, *, partial=False):
         with self.lock:
             generation, versions = token
             if generation != self.generation:
                 return False
-            updated = {}
+            updated = dict(self.rows) if partial else {}
             for entry, info in rows.items():
                 suffix = entry.strip()[-4:]
                 if self.active.get(suffix) or versions.get(suffix, 0) != self.versions.get(suffix, 0):

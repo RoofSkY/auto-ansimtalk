@@ -62,7 +62,6 @@ CREATE_NO_WINDOW = 0x08000000 if os.name == "nt" else 0
 PRESERVE_DIRS = {"config", "logs"}
 
 
-# ---------- 유틸 ----------
 def _run_hidden(cmd, **kw):
     kw.setdefault("creationflags", CREATE_NO_WINDOW)
     kw.setdefault("stdin", subprocess.DEVNULL)
@@ -134,7 +133,6 @@ def _download(url: str, dest: Path, token: str = "", accept: str = "application/
                 progress(done, total)
 
 
-# ---------- 1. 파이썬 확인 / 설치 ----------
 _PROBE = "import sys;print(sys.executable);print('%d.%d' % sys.version_info[:2])"
 
 
@@ -197,7 +195,6 @@ def install_python(log, progress=None) -> tuple[str, tuple[int, int]]:
     return found
 
 
-# ---------- 2. 릴리스 다운로드 ----------
 def get_latest_release(token: str) -> dict:
     base = f"https://api.github.com/repos/{GITHUB_REPO}/releases"
     accept = "application/vnd.github+json"
@@ -275,7 +272,6 @@ def copy_app(root: Path, install_dir: Path) -> None:
             shutil.copy2(src, dst)
 
 
-# ---------- 3. 패키지 설치 ----------
 def pip_install(python_exe: str, install_dir: Path, log) -> None:
     req = install_dir / "requirements.txt"
     if not req.exists():
@@ -297,7 +293,6 @@ def pip_install(python_exe: str, install_dir: Path, log) -> None:
         raise RuntimeError("pip 패키지 설치 실패 — 로그를 확인하세요")
 
 
-# ---------- 4. 바로가기 / 자동 실행 ----------
 def _pythonw_of(python_exe: str) -> str:
     pw = Path(python_exe).with_name("pythonw.exe")
     return str(pw) if pw.exists() else python_exe
@@ -391,7 +386,6 @@ def _delete_reg_value(key_path: str, name: str) -> None:
         pass
 
 
-# ---------- 제거 프로그램 ----------
 # 설치 폴더에 uninstall.ps1 을 만들고 Windows "설치된 앱" 목록에 등록한다.
 # ps1 은 UTF-8(BOM) 이라 한글 안내가 가능하고, 실행 시 임시 폴더로 자신을
 # 복사해 재실행하므로 설치 폴더 전체(자기 자신 포함)를 삭제할 수 있다.
@@ -512,7 +506,6 @@ def register_uninstall(install_dir: Path, log) -> None:
     log("제거 프로그램 등록 완료 (설정 > 앱 > 설치된 앱)")
 
 
-# ---------- 설치 실행 ----------
 class Options:
     def __init__(self):
         self.install_dir = DEFAULT_DIR
@@ -591,7 +584,6 @@ def launch_app(python_exe: str, install_dir: Path) -> None:
     )
 
 
-# ---------- GUI ----------
 def run_gui() -> None:
     import tkinter as tk
     from tkinter import filedialog, messagebox, scrolledtext, ttk
@@ -624,7 +616,7 @@ def run_gui() -> None:
               ).pack(side="left", padx=(6, 0))
 
     desktop_var = tk.BooleanVar(value=True)
-    autostart_var = tk.BooleanVar(value=get_autostart())  # 현재 등록 상태를 반영
+    autostart_var = tk.BooleanVar(value=get_autostart())
     opt = tk.Frame(root)
     opt.pack(fill="x", padx=20, pady=(6, 0))
     tk.Checkbutton(opt, text="바탕화면 바로가기 만들기", variable=desktop_var,
@@ -692,7 +684,6 @@ def run_gui() -> None:
     root.mainloop()
 
 
-# ---------- CLI ----------
 def main():
     ap = argparse.ArgumentParser(description=f"{APP_TITLE} 설치 프로그램")
     ap.add_argument("--silent", action="store_true", help="GUI 없이 설치")
