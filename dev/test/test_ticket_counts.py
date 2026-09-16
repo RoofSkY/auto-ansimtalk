@@ -2,20 +2,53 @@ import json
 import tempfile
 import threading
 import unittest
+import urllib.parse
 from pathlib import Path
 from unittest.mock import Mock, patch
 
 from test_backup_api import load_isolated_app
 import iparking
+import requests
 from parking_state import TicketCounts
 
 
 class TicketApiTests(unittest.TestCase):
     def response(self, data, code=None):
         response = Mock()
+        response.status_code = 200
+        response.ok = True
         response.headers = {} if code is None else {'result-code': code}
         response.json.return_value = data
         return response
+
+    def test_detail_rejections_preserve_server_reason(self):
+        for code in ('1303', '1407', 'UNKNOWN', None):
+            response = requests.Response()
+            response.status_code = 400
+            response.headers['result-message'] = urllib.parse.quote_plus('상세 조회 불가')
+            if code:
+                response.headers['result-code'] = code
+            expected = (iparking.VehicleDetailUnavailable if code in ('1303', '1407')
+                        else iparking.IparkingError)
+            with self.subTest(code=code), patch.object(iparking, '_api', return_value=response), \
+                    patch.object(iparking, '_plid', return_value='lot'):
+                with self.assertRaises(expected) as caught:
+                    iparking.get_applied_ticket_count({'parkingHistoryId': 'visit-1'})
+                if code not in ('1303', '1407'):
+                    self.assertNotIsInstance(caught.exception, iparking.VehicleDetailUnavailable)
+                    self.assertIn('HTTP 400', str(caught.exception))
+                    self.assertIn('상세 조회 불가', str(caught.exception))
+                    self.assertIn(f'result-code={code}', str(caught.exception))
+
+    def test_server_failure_is_not_treated_as_vehicle_state(self):
+        response = requests.Response()
+        response.status_code = 500
+        response.headers['result-code'] = '1303'
+        with patch.object(iparking, '_api', return_value=response), \
+                patch.object(iparking, '_plid', return_value='lot'):
+            with self.assertRaises(iparking.IparkingError) as caught:
+                iparking.get_vehicle_detail({'parkingHistoryId': 'visit-1'})
+            self.assertNotIsInstance(caught.exception, iparking.VehicleDetailUnavailable)
 
     def test_counts_all_stores_and_uses_current_history(self):
         data = {'parkingHistoryId': 'visit-1', 'myStoreApplyRequestTicketInfoList': [
@@ -140,6 +173,20 @@ class TicketPollingTests(unittest.TestCase):
         self.fetch_count.side_effect = lambda car: 1
         self.m._poll_once()
         self.assertEqual(self.m.state.ticket_counts.snapshot()['1234']['count'], 1)
+
+    def test_exit_or_payment_detail_rejection_is_not_service_failure(self):
+        self.m._poll_once()
+        self.fetch_count.side_effect = iparking.VehicleDetailUnavailable('unavailable')
+        self.m._notify_vehicle.reset_mock()
+        self.assertTrue(self.m._poll_once())
+        self.assertIn('1234', self.m.state.prev_in_cars)
+        self.assertIsNone(self.m.state.ticket_counts.snapshot()['1234']['count'])
+        self.assertFalse(self.m.state.poll_errors)
+        self.m._notify_vehicle.assert_not_called()
+        self.cars['1234'] = []
+        self.assertTrue(self.m._poll_once())
+        self.assertNotIn('1234', self.m.state.prev_in_cars)
+        self.assertEqual(self.m.state.ticket_counts.snapshot()['1234']['count'], 0)
 
     def test_exit_and_new_visit_replace_previous_visit_count(self):
         self.m._poll_once()

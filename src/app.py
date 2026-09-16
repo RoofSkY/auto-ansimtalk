@@ -786,6 +786,10 @@ def _poll_vehicle(suffixes):
         history_id, car = item
         try:
             return history_id, iparking.get_applied_ticket_count(car), None
+        except iparking.VehicleDetailUnavailable:
+            # 출차/결제 중에는 상세 조회가 불가능하다. 수량은 미확인으로 두고
+            # 실제 출차 여부는 다음 차량 검색 결과로 판단한다.
+            return history_id, None, None
         except Exception as exc:
             return history_id, None, exc
 

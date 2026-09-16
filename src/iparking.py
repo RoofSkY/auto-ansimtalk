@@ -79,6 +79,10 @@ class IparkingError(RuntimeError):
     """로그인/설정 등 복구 불가한 오류."""
 
 
+class VehicleDetailUnavailable(IparkingError):
+    """출차 또는 결제 중이라 주차권 상세를 조회할 수 없는 상태."""
+
+
 # keep-alive 연결 재사용 — 차량 검색은 워커 8개로 병렬 실행되고, 그 와중에
 # 차량등록 버튼이나 예약이 겹치면 기본 풀(10개)을 넘겨 초과 연결이 버려진다.
 # 그러면 요청마다 TLS 핸드셰이크를 새로 해 사이클이 눈에 띄게 느려진다.
@@ -343,9 +347,19 @@ def get_vehicle_detail(in_car: dict) -> dict:
         raise IparkingError("차량 식별자(parkingHistoryId) 없음")
     history_path = urllib.parse.quote(str(history_id), safe="")
     res = _api("GET", f"/api/v2/stores/completions/{_plid()}/detail/{history_path}")
+    code = res.headers.get("result-code")
+    unavailable = {
+        "1303": "이미 출차한 차량은 주차권 내역을 조회할 수 없습니다.",
+        "1407": "주차요금 결제 중에는 주차권 내역을 조회할 수 없습니다.",
+    }
+    if code in unavailable and (res.status_code == 400 or res.ok):
+        raise VehicleDetailUnavailable(unavailable[code])
+    if not res.ok or code not in (None, "0000"):
+        message = _result_message(res) or "서버가 상세 조회를 거절했습니다."
+        raise IparkingError(
+            f"등록 주차권 조회 실패 (HTTP {res.status_code}, result-code={code}): {message}"
+        )
     res.raise_for_status()
-    if res.headers.get("result-code") not in (None, "0000"):
-        raise IparkingError("등록 주차권 조회 실패")
     data = res.json()
     fields = ("myStoreApplyRequestTicketInfoList", "otherStoreApplyRequestTicketInfoList")
     if not isinstance(data, dict) or any(field not in data for field in fields):
