@@ -309,5 +309,51 @@ class BackupApiTests(unittest.TestCase):
         self.assertEqual(self.m._scheduled_inflight, set())
 
 
+    def test_manual_parking_api_registration_and_duplicate_request(self):
+        from test_manual_parking import CAR, DETAIL
+        from urllib.parse import urlencode
+        import iparking
+        with patch.object(iparking, 'find_in_cars', return_value=[CAR]), \
+                patch.object(iparking, 'get_vehicle_detail', return_value=copy.deepcopy(DETAIL)), \
+                patch.object(iparking, 'apply_discount', return_value=(True, 'done')) as apply:
+            status, cars = self.request('/api/parking/search?number=6595')
+            self.assertEqual(status, 200)
+            self.assertEqual(cars[0]['plate'], CAR['carNumber'])
+            status, view = self.request('/api/parking/detail?' + urlencode({'plate': CAR['carNumber'], 'history': CAR['parkingHistoryId']}))
+            self.assertEqual(status, 200)
+            token = view['token']
+            self.assertEqual(self.request('/api/parking/register', {'token': token, 'counts': {'free': True}})[0], 400)
+            payload = {'token': token, 'counts': {'free': 1}}
+            self.assertEqual(self.request('/api/parking/register', payload)[0], 200)
+            self.m.action_runner._queues['vehicle'].join()
+            self.assertEqual(self.request('/api/parking/requests/' + token)[1]['state'], 'success')
+            self.assertEqual(self.request('/api/parking/register', payload)[0], 200)
+            apply.assert_called_once()
+            self.assertEqual(self.request('/api/parking/requests/missing')[0], 404)
+
+
+    def test_manual_parking_cancel_api_and_duplicate_request(self):
+        from test_manual_parking import CAR, DETAIL
+        from urllib.parse import urlencode
+        import iparking
+        detail = copy.deepcopy(DETAIL)
+        detail['myStoreApplyRequestTicketInfoList'] = [
+            {'discountId': 'applied-id', 'discountName': '무료권', 'applyCount': 2}]
+        with patch.object(iparking, 'find_in_cars', return_value=[CAR]), \
+                patch.object(iparking, 'get_vehicle_detail', return_value=detail), \
+                patch.object(iparking, 'cancel_discount', return_value=(True, 'done')) as cancel:
+            status, view = self.request('/api/parking/detail?' + urlencode({'plate': CAR['carNumber'], 'history': CAR['parkingHistoryId']}))
+            self.assertEqual(status, 200)
+            payload = {'token': view['token'], 'key': 'applied-id', 'count': 1}
+            self.assertEqual(self.request('/api/parking/cancel', {**payload, 'count': True})[0], 400)
+            self.assertEqual(self.request('/api/parking/cancel', {**payload, 'key': 'other-store'})[0], 409)
+            self.assertEqual(self.request('/api/parking/cancel', payload)[0], 200)
+            self.m.action_runner._queues['vehicle'].join()
+            self.assertEqual(self.request('/api/parking/requests/' + view['token'])[1]['state'], 'success')
+            self.assertEqual(self.request('/api/parking/cancel', payload)[0], 200)
+            cancel.assert_called_once()
+            self.assertEqual(self.request('/api/parking/cancel', {**payload, 'token': ''})[0], 400)
+
+
 if __name__ == "__main__":
     unittest.main()

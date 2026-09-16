@@ -29,7 +29,10 @@ GLOBS = [
     "static/backup.css",
     "static/backup.js",
     "static/app.ico",
+    "static/favicon.ico",
     "static/tray.svg",
+    "static/parking.css",
+    "static/parking.js",
     "sound/*",
 ]
 

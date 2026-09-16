@@ -21,7 +21,7 @@ from functools import wraps
 from datetime import date, datetime
 from pathlib import Path
 
-from fastapi import FastAPI, Request, Form
+from fastapi import FastAPI, Request, Form, Body
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -33,6 +33,7 @@ from refresh import RefreshCoordinator
 from logstore import LogStore
 from schedule_queue import ScheduleQueue
 from parking_state import TicketCounts
+from manual_parking import ManualParking, ParkingError
 import ansim
 import ansim_web
 import autostart
@@ -393,11 +394,27 @@ action_runner = ActionRunner(
     lambda exc: emit_log("시스템", "작업", f"처리 오류: {exc}", False),
 )
 _attendance_lock = threading.Lock()
+_iparking_account_changing = False
+
+
+def _manual_parking_begin(plate):
+    state.ticket_counts.begin({plate[-4:]})
+    emit_event("in_cars", _vehicle_snapshot())
+
+
+def _manual_parking_finish(plate):
+    state.ticket_counts.finish({plate[-4:]})
+    _trigger_refresh("vehicle")
+
+
+manual_parking = ManualParking(action_runner, emit_log, _manual_parking_begin, _manual_parking_finish)
 
 
 @_data_locked
 def _start_action(student: dict, action: str, *, tickets=None, tag=None,
                   before=None, after=None) -> bool:
+    if action == "vehicle" and _iparking_account_changing:
+        return False
     if student.get("id") and _find_student(student["id"]) is None:
         return False
     student = copy.deepcopy(student)
@@ -1034,7 +1051,7 @@ def _static_version() -> str:
     try:
         stamp = max(
             p.stat().st_mtime
-            for name in ("tailwind.css", "alpine.min.js", "ui.css", "ui.js", "backup.css", "backup.js")
+            for name in ("tailwind.css", "alpine.min.js", "ui.css", "ui.js", "backup.css", "backup.js", "parking.css", "parking.js", "favicon.ico")
             if (p := STATIC_DIR / name).exists()
         )
         return f"{__version__}-{int(stamp)}"
@@ -1291,6 +1308,7 @@ def _restore_backup(token):
         state.att_logged = None
         state.prev_in_cars.clear()
         state.ticket_counts.clear()
+        manual_parking.clear()
         state.last_seen_plate.clear()
         state.poll_baseline.clear()
         _backup_previews.clear()
@@ -1374,6 +1392,57 @@ def _action_response(student: dict, action: str):
 @app.get("/api/actions")
 async def action_status():
     return action_runner.snapshot()
+
+
+def _parking_response(work, *args):
+    if _iparking_account_changing:
+        return JSONResponse({"error": "아이파킹 계정을 연결 중입니다. 잠시 후 다시 조회해 주세요."}, status_code=409)
+    try:
+        return work(*args)
+    except ParkingError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=exc.status)
+    except iparking.IparkingError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=502)
+    except Exception:
+        return JSONResponse({"error": "아이파킹 정보를 확인하지 못했습니다. 잠시 후 다시 조회해 주세요."}, status_code=502)
+
+
+@app.get("/api/parking/inventory")
+def parking_inventory():
+    return _parking_response(iparking.manual_inventory)
+
+
+@app.get("/api/parking/search")
+def parking_search(number: str = ""):
+    return _parking_response(manual_parking.search, number)
+
+
+@app.get("/api/parking/detail")
+def parking_detail(plate: str, history: str):
+    return _parking_response(manual_parking.detail, plate, history)
+
+
+@app.post("/api/parking/register")
+@_data_locked
+def parking_register(payload: dict = Body(...)):
+    token = payload.get("token")
+    if not isinstance(token, str) or len(token) != 32:
+        return JSONResponse({"error": "차량을 먼저 조회해 주세요."}, status_code=400)
+    return _parking_response(manual_parking.submit, token, payload.get("counts"))
+
+
+@app.post("/api/parking/cancel")
+@_data_locked
+def parking_cancel(payload: dict = Body(...)):
+    token = payload.get("token")
+    if not isinstance(token, str) or len(token) != 32:
+        return JSONResponse({"error": "차량을 먼저 조회해 주세요."}, status_code=400)
+    return _parking_response(manual_parking.submit_cancel, token, payload.get("key"), payload.get("count"))
+
+
+@app.get("/api/parking/requests/{token}")
+def parking_request_status(token: str):
+    return _parking_response(manual_parking.status, token)
 
 
 @app.get("/api/students/list")
@@ -1647,20 +1716,33 @@ async def update_iparking_account(store_id: str = Form(""), user_id: str = Form(
 
     # 저장은 리다이렉트 전에 끝내야 설정 화면에 새 값이 보인다 (파일 IO 라 금방 끝남).
     # 백그라운드 갱신 스레드가 같은 파일의 session 을 쓰고 있을 수 있어 락 안에서 처리.
-    await asyncio.to_thread(
-        jsonstore.update, iparking.CONFIG_PATH, _mutate, private=True)
+    @_data_locked
+    def _save_account():
+        global _iparking_account_changing
+        if _iparking_account_changing or any(key.startswith("vehicle:") for key in action_runner.snapshot()["resources"]):
+            return False
+        jsonstore.update(iparking.CONFIG_PATH, _mutate, private=True)
+        _iparking_account_changing = True
+        manual_parking.clear()
+        return True
+
+    if not await asyncio.to_thread(_save_account):
+        return JSONResponse({"error": "주차권 처리 또는 계정 연결이 진행 중입니다. 완료 후 저장해 주세요."}, status_code=409)
 
     def _verify() -> None:
+        global _iparking_account_changing
         state.ticket_counts.clear()
         emit_event("in_cars", _vehicle_snapshot())
-        iparking.reset_session()
         try:
+            iparking.reset_session()
             iparking.relogin()
             emit_log("시스템", "아이파킹", "계정 저장 — 주차 세션 재로그인 완료", True)
         except Exception as e:
             emit_log("시스템", "아이파킹", f"계정 저장했으나 로그인 실패: {e}", False)
         finally:
             state.ticket_counts.clear()
+            manual_parking.clear()
+            _iparking_account_changing = False
             _trigger_refresh("vehicle")
 
     # reset_session/relogin 은 폴링 스레드가 HTTP 중에 잡고 있는 로그인 락을

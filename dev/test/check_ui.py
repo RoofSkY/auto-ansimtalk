@@ -106,6 +106,7 @@ def main():
         browser = subprocess.Popen([
             r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
             "--headless=new", "--disable-gpu", "--no-first-run", "--no-default-browser-check",
+            "--disable-background-timer-throttling", "--disable-renderer-backgrounding", "--disable-backgrounding-occluded-windows",
             "--remote-debugging-port=0", "--remote-allow-origins=*", f"--user-data-dir={profile}", "about:blank",
         ], creationflags=0x08000000, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         try:
@@ -149,6 +150,7 @@ def main():
                         evaluate("window.sseBus?.stop()")
                         call("Page.stopLoading")
                         navigation = call("Page.navigate", {"url": base + route})
+                        call("Page.bringToFront")
                         for _ in range(60):
                             if evaluate("location.pathname === " + json.dumps(route) + " && document.querySelector('.app-nav') && typeof Alpine !== 'undefined'"):
                                 break
@@ -177,6 +179,19 @@ def main():
                         screenshot = call("Page.captureScreenshot", {"format": "png"})
                         (ROOT / "dev/test" / f"ui-{route.strip('/') or 'main'}-{width}.png").write_bytes(base64.b64decode(screenshot["data"]))
                         if route == "/":
+                            assert evaluate((ROOT / 'dev/test/check_parking_ui.js').read_text(encoding='utf-8'))
+                            for dark in (False, True):
+                                evaluate("Alpine.$data(document.documentElement).dark = " + json.dumps(dark))
+                                time.sleep(.05)
+                                report = evaluate((ROOT / 'dev/test/check_contrast.js').read_text(encoding='utf-8'))
+                                assert not report['failures'], (width, 'parking dialog', dark, report)
+                                shot = call('Page.captureScreenshot', {'format': 'png'})
+                                (ROOT / 'dev/test' / f"ui-parking-{'dark' if dark else 'light'}-{width}.png").write_bytes(base64.b64decode(shot['data']))
+                            call('Input.dispatchKeyEvent', {'type': 'keyDown', 'key': 'Escape', 'code': 'Escape', 'windowsVirtualKeyCode': 27})
+                            call('Input.dispatchKeyEvent', {'type': 'keyUp', 'key': 'Escape', 'code': 'Escape', 'windowsVirtualKeyCode': 27})
+                            time.sleep(.05)
+                            assert evaluate("!document.querySelector('.parking-dialog').open")
+                            evaluate("Alpine.$data(document.documentElement).dark = false")
                             assert evaluate((ROOT / 'dev/test/check_log_dialog.js').read_text(encoding='utf-8'))
                             for dark in (False, True):
                                 evaluate("Alpine.$data(document.documentElement).dark = " + json.dumps(dark))
@@ -323,6 +338,10 @@ def main():
                             time.sleep(.1)
                             assert evaluate("document.querySelector('.directory-edit').offsetHeight>0")
                             evaluate("document.querySelector('.directory-edit input').value='Changed'; document.querySelector('.directory-edit button[type=button]').click()")
+                            for _ in range(40):
+                                if evaluate("document.querySelector('.directory-edit').offsetHeight === 0"):
+                                    break
+                                time.sleep(.05)
                             assert evaluate("document.querySelector('.directory-edit input').value") == names[0]
                             assert evaluate("document.querySelector('.directory-edit').offsetHeight") == 0
                             evaluate("window.confirm=()=>true;document.querySelector('.directory-row form button').click()")

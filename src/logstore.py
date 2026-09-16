@@ -17,7 +17,7 @@ def matches(entry, kind):
     if kind == "ansim":
         return entry.get("type") in ("안심톡", "안심톡(예약)", "등하원", "등하원(예약)")
     if kind == "park":
-        return entry.get("type") in ("차량등록", "차량등록(예약)", "입차", "출차")
+        return entry.get("type") in ("차량등록", "차량등록(예약)", "차량취소", "입차", "출차")
     return True
 
 

@@ -355,7 +355,7 @@
 	        logTabs: [
 	            { key: 'all', label: '전체', match: () => true },
 	            { key: 'ansim', label: '안심톡', match: l => ['안심톡','안심톡(예약)','등하원','등하원(예약)'].includes(l.type) },
-	            { key: 'park', label: '주차', match: l => ['차량등록','차량등록(예약)','입차','출차'].includes(l.type) },
+	            { key: 'park', label: '주차', match: l => ['차량등록','차량등록(예약)','차량취소','입차','출차'].includes(l.type) },
 	            { key: 'failed', label: '실패', match: l => !l.ok },
 	        ],
 
@@ -487,7 +487,7 @@
             },
 
             logDetailTitle(log) {
-                const action = ['차량등록', '차량등록(예약)'].includes(log.type)
+                const action = log.type === '차량취소' ? '주차권 취소' : ['차량등록', '차량등록(예약)'].includes(log.type)
                     ? '주차권 등록' : ['입차', '출차', '등원', '하원'].includes(log.icon)
                     ? log.icon : log.displayType;
                 return action + (log.ok ? ' 완료' : ' 실패');
@@ -523,7 +523,7 @@
             },
 
             logVehicle(log) {
-                if (!['차량등록', '차량등록(예약)'].includes(log.type)) return null;
+                if (!['차량등록', '차량등록(예약)', '차량취소'].includes(log.type)) return null;
                 const match = (log.target || '').trim().match(/^([0-9가-힣]*\d{4}(?:\s*,\s*[0-9가-힣]*\d{4})*)(?:\s+|$)/);
                 return match ? match[1].split(',').map(value => value.trim()).join(', ') : '';
             },
@@ -625,14 +625,14 @@
 	        },
 
 	        logType(log) {
-	            if (log.type === '차량등록') return '아이파킹';
+	            if (['차량등록', '차량취소'].includes(log.type)) return '아이파킹';
 	            if (log.type === '차량등록(예약)') return '아이파킹(예약)';
 	            return log.type;
 	        },
 
 	        logTarget(log) {
 	            const target = (log.target || '').trim();
-	            if (!['안심톡', '안심톡(예약)', '등하원', '등하원(예약)', '차량등록', '차량등록(예약)'].includes(log.type)) {
+	            if (!['안심톡', '안심톡(예약)', '등하원', '등하원(예약)', '차량등록', '차량등록(예약)', '차량취소'].includes(log.type)) {
 	                return target || this.logType(log);
 	            }
 	            if (this.students.some(s => s.name === target)) return target;

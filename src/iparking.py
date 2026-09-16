@@ -295,16 +295,21 @@ def _plid() -> str:
 # ---------- 권종(할인권) 조회 ----------
 def _load_store_tickets(force: bool = False) -> dict[str, dict]:
     """스토어 보유 할인권을 classification(FREE/PAID) 별로 캐시."""
+    global _tickets_by_class
     if _tickets_by_class and not force:
         return _tickets_by_class
     res = _api("GET", f"/api/v1/stores/{_plid()}/discount-tickets/search")
     res.raise_for_status()
     data = res.json()
-    _tickets_by_class.clear()
-    for t in (data.get("allocatedTicketList") or []):
+    if (res.headers.get("result-code") not in (None, "0000") or not isinstance(data, dict)
+            or not isinstance(data.get("allocatedTicketList"), list)):
+        raise IparkingError("보유 주차권 조회 응답 형식 오류")
+    tickets = {}
+    for t in data["allocatedTicketList"]:
         cls = t.get("discountClassification")
-        if cls and cls not in _tickets_by_class:
-            _tickets_by_class[cls] = t
+        if cls and cls not in tickets:
+            tickets[cls] = t
+    _tickets_by_class = tickets
     return _tickets_by_class
 
 
@@ -331,8 +336,7 @@ def find_in_car(car_no4: str, full_plate: str | None = None) -> dict | None:
     return items[0]
 
 
-def get_applied_ticket_count(in_car: dict) -> int:
-    """현재 입차 건에 모든 스토어가 실제 적용한 무료·유료 주차권의 합계."""
+def get_vehicle_detail(in_car: dict) -> dict:
     history_id = in_car.get("parkingHistoryId")
     if history_id is None or history_id == "":
         raise IparkingError("차량 식별자(parkingHistoryId) 없음")
@@ -347,6 +351,13 @@ def get_applied_ticket_count(in_car: dict) -> int:
         raise IparkingError("등록 주차권 조회 응답 형식 오류")
     if data.get("parkingHistoryId") is not None and str(data["parkingHistoryId"]) != str(history_id):
         raise IparkingError("등록 주차권의 입차 이력이 일치하지 않음")
+    return data
+
+
+def get_applied_ticket_count(in_car: dict) -> int:
+    """현재 입차 건에 모든 스토어가 실제 적용한 무료·유료 주차권의 합계."""
+    data = get_vehicle_detail(in_car)
+    fields = ("myStoreApplyRequestTicketInfoList", "otherStoreApplyRequestTicketInfoList")
     total = 0
     for field in fields:
         applied = data[field]
@@ -362,6 +373,63 @@ def get_applied_ticket_count(in_car: dict) -> int:
                 raise IparkingError("등록 주차권 수량 형식 오류")
             total += count
     return total
+
+
+def _quantity(value):
+    if isinstance(value, str) and value.isascii() and value.isdecimal():
+        value = int(value)
+    return value if type(value) is int and value >= 0 else None
+
+
+def manual_inventory() -> list[dict]:
+    tickets = dict(_load_store_tickets(force=True))
+    return [{"key": key, "label": ticket.get("discountName") or spec["label"],
+             "remaining": _quantity(ticket.get("remainingQuantity")) if ticket else 0}
+            for key, spec in TICKETS.items()
+            for ticket in [tickets.get(spec["classification"], {})]]
+
+
+def manual_vehicle(in_car: dict) -> dict:
+    data = get_vehicle_detail(in_car)
+    if data.get("carNumber") != in_car.get("carNumber"):
+        raise IparkingError("조회 차량번호가 일치하지 않습니다. 다시 조회해 주세요.")
+    applied = []
+    for field in ("myStoreApplyRequestTicketInfoList", "otherStoreApplyRequestTicketInfoList"):
+        entries = data[field] if data[field] is not None else []
+        if not isinstance(entries, list):
+            raise IparkingError("등록 주차권 목록 형식 오류")
+        for ticket in entries:
+            count = _quantity(ticket.get("applyCount")) if isinstance(ticket, dict) else None
+            if count is None:
+                raise IparkingError("등록 주차권 수량 형식 오류")
+            if count:
+                other_store = field.startswith("other")
+                discount_id = ticket.get("discountId")
+                cancellable = not other_store and not data.get("isConsumed") and bool(discount_id)
+                applied.append({"label": ticket.get("discountName") or "주차권", "count": count,
+                                "other_store": other_store,
+                                "key": str(discount_id) if cancellable else None,
+                                "cancel_max": min(count, 100) if cancellable else 0,
+                                "ticket": {"discountId": discount_id, "discountName": ticket.get("discountName")}})
+    enabled = data.get("enableAllocatedTicketInfoList")
+    disabled = data.get("disableAllocatedTicketInfoList")
+    if not isinstance(enabled, list) or not isinstance(disabled, list):
+        raise IparkingError("등록 가능 주차권 조회 형식 오류")
+    tickets = []
+    for key, spec in TICKETS.items():
+        options = [t for t in enabled if t.get("discountClassification") == spec["classification"]]
+        ticket = next(iter(options), None)
+        stock_ticket = ticket or next((t for t in disabled if t.get("discountClassification") == spec["classification"]), {})
+        remaining = _quantity(stock_ticket.get("remainingQuantity")) if stock_ticket else 0
+        available = _quantity(ticket.get("availableApplyCount")) if ticket else 0
+        maximum = min(spec["max"], remaining or 0, available or 0)
+        if data.get("isConsumed") or not ticket or not ticket.get("discountId"):
+            maximum = 0
+        tickets.append({"key": key, "label": stock_ticket.get("discountName") or spec["label"],
+                        "remaining": remaining, "max": maximum, "ticket": ticket})
+    return {"plate": data["carNumber"], "history_id": str(in_car["parkingHistoryId"]),
+            "entered_at": data.get("inCarDateTime") or in_car.get("inCarDateTime") or "",
+            "minutes": _quantity(data.get("totalInParkingTime")), "applied": applied, "tickets": tickets}
 
 
 # ---------- 할인권 적용 ----------
@@ -388,18 +456,19 @@ def _result_message(res: requests.Response) -> str:
 
 
 def apply_discount(in_car: dict, ticket_type: str = DEFAULT_TICKET,
-                   count: int = 1) -> tuple[bool, str]:
+                   count: int = 1, *, ticket: dict | None = None) -> tuple[bool, str]:
     """할인권 적용. count 는 bulk-apply 의 applyCount 로 전달 — 취소(bulk-cancel 의
     applyCancelCount)와 같은 방식이라 여러 장도 한 번의 호출로 등록된다."""
     spec = TICKETS.get(ticket_type)
     if not spec:
         return False, f"알 수 없는 권종: {ticket_type}"
 
-    try:
-        store_tickets = _load_store_tickets()
-    except Exception as e:
-        return False, f"할인권 목록 조회 실패: {e}"
-    ticket = store_tickets.get(spec["classification"])
+    if ticket is None:
+        try:
+            store_tickets = _load_store_tickets()
+        except Exception as e:
+            return False, f"할인권 목록 조회 실패: {e}"
+        ticket = store_tickets.get(spec["classification"])
     if not ticket:
         return False, f"{spec['label']} 이 스토어에 없음"
 
@@ -421,7 +490,7 @@ def apply_discount(in_car: dict, ticket_type: str = DEFAULT_TICKET,
         f"/api/v1/stores/discounts/{plid}/discount-tickets/tickets/bulk-apply/validate",
         json_body=vbody,
     )
-    if not vres.ok:
+    if not vres.ok or vres.headers.get("result-code") not in (None, "0000"):
         return False, _result_message(vres) or _apply_error_message(vres)
 
     abody = {
@@ -437,20 +506,24 @@ def apply_discount(in_car: dict, ticket_type: str = DEFAULT_TICKET,
         f"/api/v1/stores/discounts/{plid}/discount-tickets/tickets/bulk-apply",
         json_body=abody,
     )
-    if ares.ok:
+    if ares.ok and ares.headers.get("result-code") in (None, "0000"):
         return True, _result_message(ares) or "등록 성공"
     return False, _result_message(ares) or _apply_error_message(ares)
 
 
-def cancel_discount(in_car: dict, ticket_type: str = DEFAULT_TICKET, count: int = 1) -> tuple[bool, str]:
-    """적용된 할인권 취소 — 테스트 후 되돌리기용."""
+def cancel_discount(in_car: dict, ticket_type: str = DEFAULT_TICKET, count: int = 1,
+                    *, ticket: dict | None = None) -> tuple[bool, str]:
+    """현재 입차 건에 적용된 할인권을 검증한 후 지정 수량만 취소한다."""
+    if type(count) is not int or not 1 <= count <= 100:
+        return False, "취소할 수량을 확인해 주세요."
     spec = TICKETS.get(ticket_type)
     if not spec:
         return False, f"알 수 없는 권종: {ticket_type}"
-    try:
-        ticket = _load_store_tickets().get(spec["classification"])
-    except Exception as e:
-        return False, f"할인권 목록 조회 실패: {e}"
+    if ticket is None:
+        try:
+            ticket = _load_store_tickets().get(spec["classification"])
+        except Exception as e:
+            return False, f"할인권 목록 조회 실패: {e}"
     if not ticket:
         return False, f"{spec['label']} 이 스토어에 없음"
 
@@ -461,22 +534,22 @@ def cancel_discount(in_car: dict, ticket_type: str = DEFAULT_TICKET, count: int 
     if not phid:
         return False, "차량 식별자(parkingHistoryId) 없음"
 
-    body = {
-        "parkingLotId": plid,
-        "parkingHistoryId": phid,
-        "discountTicketId": discount_id,
-        "carNumber": car_number,
-        "applyCancelCount": count,
-        "memo": "",
-    }
+    if not discount_id:
+        return False, "취소할 주차권 식별자가 없습니다."
+    body = {"parkingLotId": plid, "parkingHistoryId": phid,
+            "discountTicketId": discount_id, "carNumber": car_number}
+    validation = _api("POST", f"/api/v1/stores/discounts/{plid}/discount-tickets/tickets/bulk-cancel/validate",
+                      json_body=body)
+    if not validation.ok or validation.headers.get("result-code") not in (None, "0000"):
+        return False, _result_message(validation) or "취소할 수 없는 주차권입니다."
     res = _api(
         "POST",
         f"/api/v1/stores/discounts/{plid}/discount-tickets/tickets/bulk-cancel",
-        json_body=body,
+        json_body={**body, "applyCancelCount": count, "memo": ""},
     )
-    if res.ok:
-        return True, f"{spec['label']} {count}장 취소 성공"
-    return False, _result_message(res) or _apply_error_message(res)
+    if res.ok and res.headers.get("result-code") in (None, "0000"):
+        return True, "할인권이 취소되었습니다."
+    return False, _result_message(res) or f"취소 실패 (result-code={res.headers.get('result-code')}, HTTP {res.status_code})"
 
 
 def _apply_error_message(res: requests.Response) -> str:

@@ -1,0 +1,105 @@
+<div x-data="parkingDesk()">
+    <button type="button" class="parking-launcher" @click="open()" aria-label="iParking 차량 주차권 등록" aria-haspopup="dialog">
+        <img class="parking-launcher-icon" src="/static/favicon.ico?v={{ static_version }}" alt="" width="36" height="36" draggable="false">
+        <span x-cloak :hidden="!busy" class="parking-running" role="status" aria-label="처리 중"></span>
+    </button>
+    <dialog x-ref="parkingDialog" class="parking-dialog" aria-labelledby="parking-title">
+        <header class="parking-header">
+            <span class="parking-logo" aria-hidden="true">P</span>
+            <div><h2 id="parking-title">차량 주차권 등록</h2></div>
+            <button type="button" class="log-dialog-close" @click="$refs.parkingDialog.close()" aria-label="닫기">×</button>
+        </header>
+        <div class="parking-body" tabindex="0" aria-label="차량 조회 및 주차권 선택">
+            <section class="parking-stock" aria-label="보유 주차권">
+                <div class="parking-section-heading"><h3>보유 주차권</h3><button class="parking-text-button" @click="refreshInventory()" :disabled="inventoryLoading || busy" x-text="inventoryLoading ? '조회 중…' : '수량 갱신'"></button></div>
+                <p class="feedback-error" role="status" :hidden="!inventoryError" x-text="inventoryError"></p>
+                <div class="parking-stock-grid">
+                    <template x-for="ticket in inventory" :key="ticket.key">
+                        <div><h4 x-text="ticket.label"></h4><p>잔여 <strong x-text="inventoryLoading ? '…' : ticket.remaining ?? '확인 불가'"></strong><span :hidden="ticket.remaining === null || inventoryLoading">장</span></p></div>
+                    </template>
+                </div>
+            </section>
+            <form class="parking-search" @submit.prevent="search()">
+                <label for="parking-number">차량번호</label>
+                <div><input id="parking-number" type="text" x-model="query" @input="changeQuery()" maxlength="20" placeholder="뒤 4자리 또는 전체 번호" :disabled="busy || loading" autofocus autocomplete="off">
+                    <button class="btn btn-primary" type="submit" :disabled="busy || loading || !query.trim()" x-text="loading ? '조회 중…' : '차량 조회'"></button></div>
+                <p>차량번호 뒤 4자리 또는 전체 번호를 입력하세요.</p>
+            </form>
+            <p class="parking-feedback" :hidden="!busy" role="status">주차권을 처리 중입니다. 창을 닫아도 처리는 계속됩니다.</p>
+            <p class="notice" :hidden="!error" x-text="error" role="alert"></p>
+            <section class="parking-feedback" :hidden="!result" aria-live="polite">
+                <strong :class="result?.state === 'success' ? 'feedback-ok' : 'feedback-error'" x-text="result?.message"></strong>
+                <template x-for="(item, index) in result?.results || []" :key="index"><p x-text="item.label + ' ' + item.count + '장 · ' + item.message"></p></template>
+            </section>
+            <section class="parking-candidates" :hidden="cars.length <= 1">
+                <h3>같은 번호의 차량이 있습니다. 전체 번호를 선택해 주세요.</h3>
+                <template x-for="car in cars" :key="car.history_id">
+                    <button type="button" class="btn" :class="{'btn-outline': selected?.history_id === car.history_id}"
+                        :disabled="busy || loading" @click="selectCar(car)" :aria-pressed="selected?.history_id === car.history_id">
+                        <strong x-text="car.plate"></strong><span x-text="car.entered_at"></span>
+                    </button>
+                </template>
+            </section>
+            <template x-if="selected">
+                <div>
+                    <section class="parking-car" aria-label="조회 차량">
+                        <div><strong x-text="selected.plate"></strong><span>입차 중</span></div>
+                        <dl><div><dt>입차 일시</dt><dd x-text="selected.entered_at || '확인 불가'"></dd></div>
+                            <div><dt>총 주차 시간</dt><dd x-text="duration(selected.minutes)"></dd></div></dl>
+                    </section>
+                    <section class="parking-applied">
+                        <div class="parking-section-heading"><h3>등록된 주차권</h3><span class="count" x-text="'총 ' + totalApplied + '장'"></span></div>
+                        <p class="hint">현재 입차 건 · 다른 스토어 등록 포함</p>
+                        <p class="parking-no-tickets" :hidden="selected.applied.length > 0">등록된 주차권이 없습니다.</p>
+                        <template x-for="(ticket, index) in selected.applied" :key="index">
+                            <div class="parking-ticket-row parking-applied-row">
+                                <div><span x-text="ticket.label"></span><p class="hint" :hidden="!ticket.other_store">다른 스토어 등록</p></div>
+                                <div class="parking-applied-actions"><strong x-text="ticket.count + '장'"></strong>
+                                    <button type="button" class="btn parking-cancel-button" :hidden="!ticket.cancel_max"
+                                        :disabled="busy || loading" @click="prepareCancel(ticket)" :aria-label="ticket.label + ' 취소 수량 선택'">취소</button>
+                                    <span class="hint" :hidden="ticket.cancel_max || ticket.other_store">취소 불가</span>
+                                </div>
+                            </div>
+                        </template>
+                        <template x-if="cancellation">
+                            <div class="parking-cancel-confirm" role="group" aria-label="주차권 취소 확인">
+                                <strong x-text="(selected?.plate || '') + ' · ' + (cancellation?.label || '')"></strong>
+                                <p>취소할 수량을 선택해 주세요.</p>
+                                <div class="parking-cancel-controls">
+                                    <div class="parking-stepper">
+                                        <button type="button" class="btn" @click="setCancelCount(cancellation?.count - 1)" :disabled="(cancellation?.count || 1) <= 1" aria-label="취소 수량 줄이기">−</button>
+                                        <input x-ref="cancelQuantity" type="number" min="1" :max="cancellation?.max || 1" step="1" :value="cancellation?.count || 1"
+                                            @input="setCancelCount($event.target.value, $event.target)" aria-label="취소 수량">
+                                        <button type="button" class="btn" @click="setCancelCount(cancellation?.count + 1)" :disabled="!cancellation || cancellation.count >= cancellation.max" aria-label="취소 수량 늘리기">+</button>
+                                    </div>
+                                    <button type="button" class="btn" @click="cancellation = null; restoreFocus()">돌아가기</button>
+                                    <button type="button" class="btn parking-cancel-submit" @click="cancelTicket()" x-text="(cancellation?.count || 1) + '장 취소'"></button>
+                                </div>
+                            </div>
+                        </template>
+                    </section>
+                    <section class="parking-add">
+                        <h3>주차권 추가</h3>
+                        <template x-for="ticket in selected.tickets" :key="ticket.key">
+                            <div class="parking-ticket-row">
+                                <div><label :for="'parking-count-' + ticket.key" x-text="ticket.label"></label><p class="hint" x-text="ticket.max ? '최대 ' + ticket.max + '장 추가 가능' : '현재 등록할 수 없습니다'"></p></div>
+                                <div class="parking-stepper">
+                                    <button class="btn" type="button" @click="adjust(ticket, -1)" :disabled="busy || counts[ticket.key] <= 0" :aria-label="ticket.label + ' 수량 줄이기'">−</button>
+                                    <input type="number" :id="'parking-count-' + ticket.key" :value="counts[ticket.key]"
+                                        @input="setCount(ticket, $event.target)" @blur="setCount(ticket, $event.target, true)"
+                                        min="0" :max="countLimit(ticket)" step="1" :disabled="busy || !ticket.max">
+                                    <button class="btn" type="button" @click="adjust(ticket, 1)" :disabled="busy || counts[ticket.key] >= countLimit(ticket)" :aria-label="ticket.label + ' 수량 늘리기'">+</button>
+                                </div>
+                            </div>
+                        </template>
+                        <div class="parking-selection"><span>추가할 주차권</span><strong x-text="summary"></strong></div>
+                    </section>
+                </div>
+            </template>
+        </div>
+        <footer class="parking-footer">
+            <button type="button" class="btn" @click="$refs.parkingDialog.close()">닫기</button>
+            <button type="button" class="btn btn-primary" @click="register()" :disabled="!canRegister" x-text="busy ? '처리 중…' : '주차권 등록'"></button>
+        </footer>
+    </dialog>
+</div>

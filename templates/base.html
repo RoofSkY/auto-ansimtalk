@@ -18,6 +18,8 @@
     <!-- 로컬 번들 (인터넷 없이도 UI 동작) — 정적 CSS 는 dev\build_css.bat 로 재생성 -->
     <link rel="stylesheet" href="/static/tailwind.css?v={{ static_version }}">
     <link rel="stylesheet" href="/static/ui.css?v={{ static_version }}">
+    <link rel="stylesheet" href="/static/parking.css?v={{ static_version }}">
+    <script defer src="/static/parking.js?v={{ static_version }}"></script>
     <script defer src="/static/alpine.min.js?v={{ static_version }}"></script>
     <script defer src="/static/ui.js?v={{ static_version }}"></script>
     <style>
@@ -43,6 +45,7 @@
     <main class="app-main">
         {% block content %}{% endblock %}
     </main>
+    {% include "parking.html" %}
 
     <div x-data="vehicleToasts()" x-init="connect()" class="toast-stack" role="status" aria-live="polite">
         <template x-for="t in toasts" :key="t.id">
