@@ -32,6 +32,7 @@ from actions import ActionRunner, resource_keys
 from refresh import RefreshCoordinator
 from logstore import LogStore
 from schedule_queue import ScheduleQueue
+from parking_state import TicketCounts
 import ansim
 import ansim_web
 import autostart
@@ -220,6 +221,7 @@ class State:
         # 등하원 상태는 메모리로만 관리 — 재시작 시 첫 동기화가 다시 채움
         self.att = {"date": date.today().isoformat(), "status": {}, "times": {}}
         self.prev_in_cars: set[str] = set()
+        self.ticket_counts = TicketCounts()
         self.last_seen_plate: dict[str, str] = {}
         # 입출차 판정 기준이 잡힌 차량 — 처음 확인된 차량은 알림 없이 기준만 잡는다
         self.poll_baseline: set[str] = set()
@@ -413,7 +415,15 @@ def _start_action(student: dict, action: str, *, tickets=None, tag=None,
                 finally:
                     _trigger_refresh("att")
             else:
-                do_vehicle(student, tickets, tag or "차량등록")
+                suffixes = {parsed[0] for entry in student.get("car_no4s", [])
+                            if (parsed := _parse_car_entry(entry))}
+                state.ticket_counts.begin(suffixes)
+                emit_event("in_cars", _vehicle_snapshot())
+                try:
+                    do_vehicle(student, tickets, tag or "차량등록")
+                finally:
+                    state.ticket_counts.finish(suffixes)
+                    _trigger_refresh("vehicle")
         finally:
             if after:
                 after(started)
@@ -645,6 +655,7 @@ def _report_poll_health(failed: int, total: int, errors: dict[str, Exception]) -
 
 @_background_read
 def _poll_once():
+    ticket_token = state.ticket_counts.token()
     entry_to_student: dict[str, dict] = {}
     entry_to_full: dict[str, str] = {}
     by_last4: dict[str, list[str]] = {}
@@ -682,9 +693,8 @@ def _poll_once():
     # (네트워크 순단·서버 점검 때 가짜 출차/입차가 무더기로 발생하는 것을 방지)
     unknown: set[str] = {e for l4, r in results.items() if r is None for e in by_last4[l4]}
     observed = tracked - unknown  # 이번 주기에 상태를 실제로 확인한 차량
-    _report_poll_health(len(errors), len(last4_list), errors)
-
     current: set[str] = set()
+    matches = {}
     for last4, entries in by_last4.items():
         cars = results.get(last4)
         if not cars:  # None=조회 실패(위에서 제외됨) / []=정상적으로 입차 없음
@@ -698,6 +708,37 @@ def _poll_once():
             if match:
                 current.add(entry)
                 state.last_seen_plate[entry] = match.get("carNumber") or entry
+                matches[entry] = match
+
+    # 번호 4자리/전체 번호로 중복 등록한 차량도 입차 이력별 한 번만 조회한다.
+    histories = {str(car["parkingHistoryId"]): car for car in matches.values()
+                 if car.get("parkingHistoryId") is not None and car.get("parkingHistoryId") != ""}
+
+    def _count(item):
+        history_id, car = item
+        try:
+            return history_id, iparking.get_applied_ticket_count(car)
+        except Exception as exc:
+            errors[f"ticket:{history_id}"] = exc
+            return history_id, None
+
+    with ThreadPoolExecutor(max_workers=8) as ex:
+        counts = dict(ex.map(_count, histories.items()))
+    ticket_rows = {}
+    for entry in tracked:
+        if entry in unknown:
+            ticket_rows[entry] = {"history_id": None, "count": None}
+        elif entry not in matches:
+            ticket_rows[entry] = {"history_id": None, "count": 0}
+        else:
+            history_id = matches[entry].get("parkingHistoryId")
+            history_id = str(history_id) if history_id is not None else None
+            ticket_rows[entry] = {"history_id": history_id, "count": counts.get(history_id)}
+            if not history_id:
+                errors[f"ticket:{entry}"] = iparking.IparkingError("차량 식별자(parkingHistoryId) 없음")
+    if not state.ticket_counts.update(ticket_rows, ticket_token):
+        return False
+    _report_poll_health(len(errors), len(last4_list) + len(matches), errors)
 
     # 기준(baseline)은 차량별로 잡는다. 전체가 성공해야 기준을 잡는 방식이면
     # 특정 차량 하나만 계속 실패해도 입출차 알림이 영영 발생하지 않는다.
@@ -722,8 +763,12 @@ def _poll_once():
     # 이번에 확인된 차량은 다음 주기부터 판정 대상. 등록이 사라진 차량은 정리.
     state.poll_baseline = (state.poll_baseline | observed) & tracked
     state.prev_in_cars = current | (state.prev_in_cars & unknown)
-    emit_event("in_cars", {"cars": list(state.prev_in_cars)})
+    emit_event("in_cars", _vehicle_snapshot())
     return not errors
+
+
+def _vehicle_snapshot():
+    return {"cars": list(state.prev_in_cars), "ticket_counts": state.ticket_counts.snapshot()}
 
 
 def _build_att_logged() -> dict[str, dict[str, bool]]:
@@ -1056,6 +1101,7 @@ def index(request: Request):
     return templates.TemplateResponse(request, "index.html", {
         "students": state.students,
         "in_cars": list(state.prev_in_cars),
+        "ticket_counts": state.ticket_counts.snapshot(),
         "logs": page["logs"],
         "logs_has_more": page["has_more"],
         "logs_date": page["date"],
@@ -1243,6 +1289,7 @@ def _restore_backup(token):
         state.att = {"date": date.today().isoformat(), "status": {}, "times": {}}
         state.att_logged = None
         state.prev_in_cars.clear()
+        state.ticket_counts.clear()
         state.last_seen_plate.clear()
         state.poll_baseline.clear()
         _backup_previews.clear()
@@ -1603,12 +1650,17 @@ async def update_iparking_account(store_id: str = Form(""), user_id: str = Form(
         jsonstore.update, iparking.CONFIG_PATH, _mutate, private=True)
 
     def _verify() -> None:
+        state.ticket_counts.clear()
+        emit_event("in_cars", _vehicle_snapshot())
         iparking.reset_session()
         try:
             iparking.relogin()
             emit_log("시스템", "아이파킹", "계정 저장 — 주차 세션 재로그인 완료", True)
         except Exception as e:
             emit_log("시스템", "아이파킹", f"계정 저장했으나 로그인 실패: {e}", False)
+        finally:
+            state.ticket_counts.clear()
+            _trigger_refresh("vehicle")
 
     # reset_session/relogin 은 폴링 스레드가 HTTP 중에 잡고 있는 로그인 락을
     # 기다릴 수 있어 이벤트 루프에서 직접 호출하면 안 된다
@@ -1624,7 +1676,7 @@ async def event_stream(request: Request):
 
     # 접속 시점의 현재 상태를 먼저 내려줌 — 특히 refreshed 는 브라우저가
     # 첫 갱신 완료 방송보다 늦게 연결해도 카운트다운을 바로 받도록 필수
-    initial_msgs = [{"type": "in_cars", "data": {"cars": list(state.prev_in_cars)}}]
+    initial_msgs = [{"type": "in_cars", "data": _vehicle_snapshot()}]
     initial_msgs.append({"type": "actions", "data": action_runner.snapshot()})
     initial_msgs.append({"type": "service_status", "data": _service_snapshot()})
     if state.next_refresh_ts > 0:

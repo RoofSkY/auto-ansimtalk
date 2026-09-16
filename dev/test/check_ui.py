@@ -32,6 +32,9 @@ context = dict(students=students, config=config, service_status={"health":{"ansi
     {"time": "15:40:12", "type": "안심톡", "target": "0002 이서연", "message": "출석번호를 확인해 주세요", "ok": False},
     {"time": "15:20:10", "type": "안심톡", "target": "0004 최하윤", "message": "하원하였습니다", "ok": True}],
     in_cars=["1234", "1456"], att_status={"0001": "등원", "0003": "등원", "0004": "하원", "0005": "결석"},
+    ticket_counts={"1234": {"history_id": "preview-a", "count": 1},
+                   "1456": {"history_id": "preview-b", "count": 2},
+                   "1678": {"history_id": None, "count": 0}},
     att_times={"0001": {"in": "14:30"}, "0003": {"in": "15:10"}, "0004": {"in": "13:00", "out": "15:20"}},
     att_refresh_remaining=55, tickets=tickets, ticket_order=["free", "paid"], day_labels=list("월화수목금"),
     schedules=[{"id": "r1", "time": "16:00", "code": "0001", "car_no4": "1234", "enabled": True,
@@ -191,6 +194,11 @@ def main():
                                 assert evaluate("(() => {const toolbar=document.querySelector('.student-toolbar').getBoundingClientRect(), log=document.querySelector('.log-panel').getBoundingClientRect();return Math.abs(toolbar.left-(innerWidth-toolbar.right))<1 && Math.abs(toolbar.right-log.right)<1})()")
                             assert evaluate("document.querySelectorAll('.student-row').length") == 6
                             assert evaluate("document.querySelector('.row-actions button').disabled") is False
+                            assert evaluate("[...document.querySelectorAll('.parking-count')].filter(e=>e.getClientRects().length).map(e=>e.textContent)") == ['1', '2']
+                            assert evaluate("(() => {const style=getComputedStyle(document.querySelector('.parking-count')); return [style.backgroundColor,style.color,style.borderTopWidth,style.boxShadow]})()") == ['rgb(234, 75, 70)', 'rgb(255, 255, 255)', '0px', 'none']
+                            assert evaluate("(() => {const app=mainApp();app.ticketCounts={'1234':{history_id:'same',count:2},'11가1234':{history_id:'same',count:2},'5678':{history_id:'other',count:3}};return app.registeredTickets({car_no4s:['1234','11가1234','5678']})})()") == 5
+                            assert evaluate("(() => {const app=mainApp();app.ticketCounts={'1234':{history_id:'same',count:null}};return app.registeredTickets({car_no4s:['1234']})})()") is None
+                            assert evaluate("[...document.querySelectorAll('.parking-count')].filter(e=>e.getClientRects().length).every(e=>{const b=e.parentElement.getBoundingClientRect(),r=e.getBoundingClientRect();return r.top<b.top && r.right>=b.right && r.height===20})")
                             assert evaluate("document.querySelectorAll('.row-feedback').length") == 0
                             assert evaluate("document.querySelectorAll('.car-cell,.parking-badge').length") == 0
                             assert evaluate("document.querySelectorAll('.student-head > span').length") == 10
@@ -222,8 +230,11 @@ def main():
                                 assert evaluate("(() => {const center = e => {const r=e.getBoundingClientRect();return r.x+r.width/2}; return [...document.querySelectorAll('.student-table')].every(table => {const headers=[...table.querySelector('.student-head').children]; return [...table.querySelectorAll('.student-row')].every(row => [...row.children].every((cell,i) => Math.abs(center(cell)-center(headers[i]))<1 && getComputedStyle(cell).textAlign==='center'))})})()")
                             evaluate("window.dispatchEvent(new CustomEvent('sse',{detail:{type:'in_cars',data:{cars:[]}}}))")
                             time.sleep(.05)
+                            assert evaluate("[...document.querySelectorAll('.parking-count')].filter(e=>e.getClientRects().length).length") == 0
                             assert evaluate("document.querySelectorAll('.student-row.is-parked').length") == 0
-                            evaluate("window.dispatchEvent(new CustomEvent('sse',{detail:{type:'in_cars',data:{cars:['1234','1456']}}}))")
+                            evaluate("window.dispatchEvent(new CustomEvent('sse',{detail:{type:'in_cars',data:{cars:['1234','1456'],ticket_counts:{'1234':{history_id:'preview-a',count:2},'1456':{history_id:'preview-b',count:1},'1678':{history_id:null,count:0}}}}}))")
+                            time.sleep(.05)
+                            assert evaluate("[...document.querySelectorAll('.parking-count')].filter(e=>e.getClientRects().length).map(e=>e.textContent)") == ['2', '1']
                             time.sleep(.05)
                             assert evaluate("document.querySelectorAll('.student-row.is-parked').length") == 2
                             assert evaluate("new Set([...document.querySelectorAll('.attendance-cell .badge')].map(e => `${e.offsetWidth}x${e.offsetHeight}`)).size") == 1

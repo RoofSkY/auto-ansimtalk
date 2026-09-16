@@ -113,10 +113,13 @@
 										@click="doAction(s.id, 'vehicle')"
 										:disabled="isBusy(s, 'vehicle')"
 										:aria-busy="isBusy(s, 'vehicle')"
-										:aria-label="s.name + ' ' + actionLabel(s, 'vehicle')"
-										x-text="actionLabel(s, 'vehicle')"
-										class="btn btn-outline">
-										주차권 등록
+										:aria-label="s.name + ' ' + actionLabel(s, 'vehicle') + ' · ' + ticketCountLabel(s)"
+                                        :title="ticketCountLabel(s)"
+										class="btn btn-outline parking-button">
+                                        <span x-text="actionLabel(s, 'vehicle')">주차권 등록</span>
+                                        <span class="parking-count" x-cloak
+                                            x-show="registeredTickets(s) > 0"
+                                            x-text="registeredTickets(s)" aria-hidden="true"></span>
 									</button>
 								</div>
 							</article>
@@ -285,6 +288,7 @@
             pendingLogs: [],
             logFrame: null,
 	        inCars: new Set({{ in_cars | tojson }}),
+            ticketCounts: {{ ticket_counts | default({}) | tojson }},
 	        attStatus: {{ att_status | tojson }},
 	        attTimes: {{ att_times | tojson }},
 	        refreshRemaining: {{ att_refresh_remaining }},
@@ -348,6 +352,7 @@
 	                        .catch(() => {});
 	                } else if (msg.type === 'in_cars') {
 	                    this.inCars = new Set(msg.data.cars);
+                        this.ticketCounts = msg.data.ticket_counts || {};
 	                } else if (msg.type === 'att_status') {
 	                    this.attStatus[msg.data.key] = msg.data.status;
 	                    this.attTimes[msg.data.key] = {
@@ -382,6 +387,30 @@
 	            if (this.serviceHealth[service] === true) return 'online';
 	            return this.serviceHealth[service] === false ? 'failed' : '';
 	        },
+
+            registeredTickets(student) {
+                const entries = [...new Set(student.car_no4s || [])];
+                if (!entries.length) return 0;
+                let total = 0;
+                const seen = new Set();
+                for (const entry of entries) {
+                    const value = this.ticketCounts[entry];
+                    if (!value || !Number.isInteger(value.count) || value.count < 0) return null;
+                    if (value.history_id != null) {
+                        const id = String(value.history_id);
+                        if (seen.has(id)) continue;
+                        seen.add(id);
+                    }
+                    total += value.count;
+                }
+                return total;
+            },
+
+            ticketCountLabel(student) {
+                const count = this.registeredTickets(student);
+                return count === null ? '등록 주차권 수량 확인 중 또는 조회 실패'
+                    : `현재 입차 차량에 등록된 주차권 ${count}개 (다른 스토어 포함)`;
+            },
 
 	        isParked(student) {
 	            for (const c of (student.car_no4s || [])) {

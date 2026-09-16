@@ -1,7 +1,8 @@
 """아이파킹 STORE 포털(store.iparking.co.kr) 주차 할인권 자동 등록.
 
 app.py 가 쓰는 인터페이스:
-  TICKETS, find_in_cars(car4), find_in_car(car4, full_plate), apply_discount(in_car, ttype)
+  TICKETS, find_in_cars(car4), find_in_car(car4, full_plate),
+  get_applied_ticket_count(in_car), apply_discount(in_car, ttype)
 
 브라우저(Playwright) 없이 순수 HTTP 로 로그인한다.
 자격증명+세션: config/iparking.json  { store_id, user_id, password, session:{access,refresh,plid} }
@@ -328,6 +329,39 @@ def find_in_car(car_no4: str, full_plate: str | None = None) -> dict | None:
                 return it
         return None
     return items[0]
+
+
+def get_applied_ticket_count(in_car: dict) -> int:
+    """현재 입차 건에 모든 스토어가 실제 적용한 무료·유료 주차권의 합계."""
+    history_id = in_car.get("parkingHistoryId")
+    if history_id is None or history_id == "":
+        raise IparkingError("차량 식별자(parkingHistoryId) 없음")
+    history_path = urllib.parse.quote(str(history_id), safe="")
+    res = _api("GET", f"/api/v2/stores/completions/{_plid()}/detail/{history_path}")
+    res.raise_for_status()
+    if res.headers.get("result-code") not in (None, "0000"):
+        raise IparkingError("등록 주차권 조회 실패")
+    data = res.json()
+    fields = ("myStoreApplyRequestTicketInfoList", "otherStoreApplyRequestTicketInfoList")
+    if not isinstance(data, dict) or any(field not in data for field in fields):
+        raise IparkingError("등록 주차권 조회 응답 형식 오류")
+    if data.get("parkingHistoryId") is not None and str(data["parkingHistoryId"]) != str(history_id):
+        raise IparkingError("등록 주차권의 입차 이력이 일치하지 않음")
+    total = 0
+    for field in fields:
+        applied = data[field]
+        if applied is None:
+            applied = []
+        if not isinstance(applied, list):
+            raise IparkingError("등록 주차권 목록 형식 오류")
+        for ticket in applied:
+            count = ticket.get("applyCount") if isinstance(ticket, dict) else None
+            if isinstance(count, str) and count.isascii() and count.isdecimal():
+                count = int(count)
+            if type(count) is not int or count < 0:
+                raise IparkingError("등록 주차권 수량 형식 오류")
+            total += count
+    return total
 
 
 # ---------- 할인권 적용 ----------

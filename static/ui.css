@@ -20,6 +20,7 @@
 body{background:var(--canvas)!important;color:var(--ink)!important;font-family:'Malgun Gothic',system-ui,sans-serif;font-size:14px;line-height:1.55;-webkit-user-select:none;user-select:none}
 input,textarea,[contenteditable]:not([contenteditable="false"]){-webkit-user-select:text;user-select:text}
 button,a,input{touch-action:manipulation}button{transition:background .15s,border-color .15s}button:disabled{cursor:wait}a,button,input,select,summary{scroll-margin-top:100px}
+.parking-button{position:relative;overflow:visible}.parking-count{position:absolute;top:-8px;right:-3px;display:inline-flex;align-items:center;justify-content:center;min-width:20px;height:20px;box-sizing:border-box;padding:0 5px;border:0;border-radius:999px;background:#EA4B46;color:#fff;font-size:12px;font-weight:700;line-height:1;pointer-events:none;box-shadow:none}
 :is(a,button,input,select,summary):focus-visible{outline:3px solid var(--focus)!important;outline-offset:3px}
 input:not([type=checkbox]):not([type=hidden]),select{min-height:38px;border:1px solid var(--control-line);border-radius:8px;background:var(--surface);color:var(--ink);padding:8px 11px;max-width:100%;font-size:14px}input[type=checkbox]{accent-color:var(--blue);width:17px;height:17px;flex-shrink:0}input::placeholder{color:var(--muted);opacity:1}
 .app-header{position:sticky;top:0;z-index:30;min-height:64px;padding:0 30px;display:flex;align-items:center;gap:38px;background:var(--surface);border-bottom:1px solid var(--line)}

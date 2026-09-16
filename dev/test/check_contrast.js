@@ -11,6 +11,7 @@
         return (values[1] + .05) / (values[0] + .05);
     };
     const failures = [];
+    const requestedColorExceptions = [];
     let minimum = 99, checked = 0;
     const check = (element, foreground, bg, threshold, kind) => {
         const value = ratio(foreground, bg);
@@ -24,9 +25,13 @@
         if (style.visibility === 'hidden') continue;
         const bg = background(element);
         const directText = [...element.childNodes].some(node => node.nodeType === Node.TEXT_NODE && node.textContent.trim());
-        if (directText || element.matches('input:not([type=checkbox]),select')) check(element, rgba(style.color), bg, 4.5, 'text');
+        // 주차권 뱃지는 사용자가 지정한 배경 #EA4B46 + 흰 글자를 그대로 검증한다.
+        const requestedBadge = element.matches('.parking-count')
+            && style.backgroundColor === 'rgb(234, 75, 70)' && style.color === 'rgb(255, 255, 255)';
+        if (requestedBadge) requestedColorExceptions.push({class: element.className, ratio: +ratio(rgba(style.color), bg).toFixed(2)});
+        else if (directText || element.matches('input:not([type=checkbox]),select')) check(element, rgba(style.color), bg, 4.5, 'text');
         if (element.matches('input[placeholder]')) check(element, rgba(getComputedStyle(element, '::placeholder').color), bg, 4.5, 'placeholder');
         if (element.matches('input:not([type=checkbox]),select,.btn,.theme-button,.filter-btn')) check(element, rgba(style.borderTopColor), background(element.parentElement), 3, 'control');
     }
-    return {checked, minimumText: +minimum.toFixed(2), failures};
+    return {checked, minimumText: +minimum.toFixed(2), failures, requestedColorExceptions};
 })()
